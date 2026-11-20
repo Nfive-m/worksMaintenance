@@ -1,0 +1,1830 @@
+/* =========================================================
+   WorkOrder | Maintenance Department Management System
+   University of Ibadan | vanilla front-end, Supabase Auth for accounts; application records remain in localStorage
+   ========================================================= */
+(() => {
+'use strict';
+
+/* ---------------------------------------------------------
+   1. Constants
+--------------------------------------------------------- */
+const KEYS = {
+  tickets: 'tickets',
+  projects: 'projects',
+  reports: 'fieldReports',
+  technicians: 'technicians',
+  notifications: 'notifications',
+  settings: 'settings',
+  counters: 'counters',
+};
+const DBKEY = { tickets: KEYS.tickets, projects: KEYS.projects, reports: KEYS.reports, technicians: KEYS.technicians, notifications: KEYS.notifications };
+
+const CATEGORIES = ['Electrical', 'Plumbing', 'Air Conditioning', 'Generator', 'Carpentry', 'Building', 'Water Supply', 'Other'];
+const PRIORITIES = ['Low', 'Medium', 'High', 'Critical'];
+const TICKET_STATUSES = ['Open', 'Assigned', 'In Progress', 'On Hold', 'Resolved', 'Closed'];
+const TECH_ALLOWED_STATUSES = ['Assigned', 'In Progress', 'On Hold', 'Resolved'];
+const PROJECT_STATUSES = ['Not Started', 'In Progress', 'On Hold', 'Completed'];
+const REPORT_STATUSES = ['Submitted', 'Reviewed', 'Completed', 'Requires Follow-up'];
+const TECH_REPORT_STATUSES = ['Submitted', 'Completed', 'Requires Follow-up'];
+const TECH_STATUSES = ['Available', 'Busy', 'On Leave'];
+const SPECIALIZATIONS = ['Electrical', 'Plumbing', 'HVAC', 'Generator', 'Carpentry', 'General Maintenance'];
+const TEAMS = ['Electrical Team', 'Plumbing Team', 'HVAC Team', 'Generator Team', 'Carpentry Team', 'General Maintenance Team', 'Multi-trade Team'];
+const LOCATIONS = ['Faculty of Science', 'Faculty of Arts', 'Faculty of Social Sciences', 'UI Teaching and Research Farm', 'Male Hostel B', 'Female Hostel', 'Engineering Workshop', 'Administrative Building', 'Student Union Building'];
+const DEPARTMENTS = ['Faculty of Science', 'Faculty of Arts', 'Faculty of Social Sciences', 'Faculty of Agriculture', 'Faculty of Technology', 'Registry', 'Bursary', 'Library', 'Student Affairs', 'Hall Management', 'Works and Maintenance'];
+const ADMIN_ONLY_PAGES = ['technicians', 'analytics'];
+const RANGE_LABELS = { all: 'All time', today: 'Today', week: 'This week', month: 'This month' };
+
+const CATEGORY_ICON = {
+  'Electrical': 'fa-bolt', 'Plumbing': 'fa-faucet-drip', 'Air Conditioning': 'fa-snowflake', 'Generator': 'fa-gears',
+  'Carpentry': 'fa-hammer', 'Building': 'fa-building', 'Water Supply': 'fa-droplet', 'Other': 'fa-screwdriver-wrench'
+};
+const TONE = {
+  'Open': 'orange', 'Assigned': 'violet', 'In Progress': 'blue', 'On Hold': 'gray', 'Resolved': 'green', 'Closed': 'slate',
+  'Not Started': 'gray', 'Completed': 'green',
+  'Submitted': 'blue', 'Reviewed': 'violet', 'Requires Follow-up': 'red',
+  'Available': 'green', 'Busy': 'orange', 'On Leave': 'gray',
+  'Low': 'gray', 'Medium': 'blue', 'High': 'orange', 'Critical': 'red'
+};
+const STATUS_COLORS = { 'Open': '#d9822b', 'Assigned': '#7a5af8', 'In Progress': '#1f6fe0', 'On Hold': '#8792a4', 'Resolved': '#1d9a6c', 'Closed': '#4b5a70' };
+
+/* ---------------------------------------------------------
+   2. Small helpers
+--------------------------------------------------------- */
+const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+const esc = v => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const uid = p => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+const pad = n => String(n).padStart(2, '0');
+const toDateStr = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const today = () => toDateStr(new Date());
+const daysFromNow = n => { const d = new Date(); d.setDate(d.getDate() + n); return toDateStr(d); };
+const hoursAgo = h => new Date(Date.now() - h * 3600000).toISOString();
+const parseDate = s => (!s ? null : new Date(String(s).length === 10 ? s + 'T00:00:00' : s));
+const fmtDate = s => { const d = parseDate(s); return d && !isNaN(d) ? d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'; };
+const fmtDateTime = s => { const d = parseDate(s); return d && !isNaN(d) ? d.toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'; };
+const money = n => '₦' + Number(n || 0).toLocaleString('en-NG');
+const initials = name => {
+  const parts = String(name || '?').replace(/[^A-Za-z ]/g, ' ').split(/\s+/).filter(Boolean);
+  if (!parts.length) return '?';
+  return (parts[0][0] + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase();
+};
+const val = id => { const el = document.getElementById(id); return el ? el.value : ''; };
+const toneOf = v => TONE[v] || 'gray';
+const badge = v => `<span class="badge tone-${toneOf(v)}">${esc(v)}</span>`;
+const catIcon = c => CATEGORY_ICON[c] || 'fa-screwdriver-wrench';
+
+function timeAgo(iso) {
+  const d = parseDate(iso);
+  if (!d || isNaN(d)) return '';
+  const mins = Math.round((Date.now() - d.getTime()) / 60000);
+  if (mins < 1) return 'Just now';
+  if (mins < 60) return `${mins} min ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs} hr${hrs === 1 ? '' : 's'} ago`;
+  const days = Math.round(hrs / 24);
+  if (days < 7) return `${days} day${days === 1 ? '' : 's'} ago`;
+  return fmtDate(iso);
+}
+function fmtDuration(ms) {
+  if (ms == null || isNaN(ms)) return '—';
+  const mins = Math.round(ms / 60000);
+  if (mins < 60) return `${mins} min`;
+  const hrs = ms / 3600000;
+  if (hrs < 24) return `${hrs.toFixed(1)} hrs`;
+  const d = Math.floor(hrs / 24);
+  return `${d}d ${Math.round(hrs - d * 24)}h`;
+}
+function daysUntil(dateStr) {
+  const d = parseDate(dateStr);
+  if (!d) return null;
+  const t = new Date(); t.setHours(0, 0, 0, 0);
+  return Math.round((d - t) / 86400000);
+}
+
+/* ---------------------------------------------------------
+   3. Storage layer (localStorage, wrapped in try/catch)
+--------------------------------------------------------- */
+const store = {
+  get(key, fallback) {
+    try {
+      const raw = localStorage.getItem(key);
+      return raw === null ? fallback : JSON.parse(raw);
+    } catch (e) { return fallback; }
+  },
+  set(key, value) {
+    try { localStorage.setItem(key, JSON.stringify(value)); return true; }
+    catch (e) { toast('Could not save. Browser storage may be full or blocked.', 'error'); return false; }
+  },
+  remove(key) { try { localStorage.removeItem(key); } catch (e) { /* ignore */ } }
+};
+
+let db = { tickets: [], projects: [], reports: [], technicians: [], notifications: [] };
+let settings = null;
+let user = null;
+let currentPage = 'dashboard';
+
+function loadDb() {
+  Object.keys(DBKEY).forEach(name => {
+    const data = store.get(DBKEY[name], []);
+    db[name] = Array.isArray(data) ? data : [];
+  });
+  db.tickets.forEach(t => { if (!Array.isArray(t.log)) t.log = []; });
+}
+function saveDb(name) { return store.set(DBKEY[name], db[name]); }
+
+function nextId(prefix, list, start) {
+  const counters = store.get(KEYS.counters, {}) || {};
+  const max = list.reduce((m, x) => {
+    const n = parseInt(String(x.id).split('-')[1], 10);
+    return isNaN(n) ? m : Math.max(m, n);
+  }, start - 1);
+  const next = Math.max(counters[prefix] || 0, max) + 1;
+  counters[prefix] = next;
+  store.set(KEYS.counters, counters);
+  return `${prefix}-${next}`;
+}
+
+/* ---------------------------------------------------------
+   4. Data loading (no demo records are seeded)
+--------------------------------------------------------- */
+/* ---------------------------------------------------------
+   5. Settings & theme
+--------------------------------------------------------- */
+function defaultSettings() {
+  return { dark: false, notifTicket: true, notifProject: true, notifReport: true, profiles: {} };
+}
+function loadSettings() {
+  const s = store.get(KEYS.settings, null);
+  settings = Object.assign(defaultSettings(), s && typeof s === 'object' ? s : {});
+  if (!settings.profiles || typeof settings.profiles !== 'object') settings.profiles = {};
+}
+function saveSettings() { return store.set(KEYS.settings, settings); }
+function applyTheme() { document.documentElement.setAttribute('data-theme', settings.dark ? 'dark' : 'light'); }
+function profile() {
+  const base = user ? { name: user.name, department: user.department, email: user.email, phone: user.phone } : {};
+  return Object.assign(base, user ? settings.profiles[user.email] || {} : {});
+}
+function displayName() { return (user && profile().name) || (user ? user.name : ''); }
+
+/* ---------------------------------------------------------
+   6. Authentication (Supabase Auth)
+--------------------------------------------------------- */
+const SUPABASE_URL = 'https://ngirgfgudopxrlotpsky.supabase.co';
+const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_FVeMEa91Af_2amO2xVI6fA_Pd8f1tFk';
+const supabaseClient = window.supabase
+  ? window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY)
+  : null;
+
+function authErrorMessage(error) {
+  const message = error && error.message ? error.message : 'An unexpected authentication error occurred.';
+  if (/Invalid login credentials/i.test(message)) return 'Email or password is incorrect.';
+  if (/Email not confirmed/i.test(message)) return 'Please confirm your email address before signing in.';
+  if (/User already registered/i.test(message)) return 'An account with this email may already exist. Try signing in.';
+  return message;
+}
+
+function showAuthMessage(id, message) {
+  const box = $('#' + id);
+  if (!box) return;
+  box.textContent = message || '';
+  box.hidden = !message;
+}
+
+function setAuthButton(button, busy, label) {
+  if (!button) return;
+  button.disabled = busy;
+  button.innerHTML = busy
+    ? '<i class="fa-solid fa-circle-notch fa-spin" aria-hidden="true"></i> Please wait'
+    : label;
+}
+
+function switchAuthMode(mode) {
+  const signingUp = mode === 'signup';
+  $('#loginForm').hidden = signingUp;
+  $('#registerForm').hidden = !signingUp;
+  showAuthMessage('loginError', '');
+  showAuthMessage('registerError', '');
+  showAuthMessage('registerSuccess', '');
+  (signingUp ? $('#registerName') : $('#loginEmail')).focus();
+}
+
+async function fetchUserProfile(authUser) {
+  const { data, error } = await supabaseClient
+    .from('profiles')
+    .select('id, full_name, role, department, phone, technician_id')
+    .eq('id', authUser.id)
+    .single();
+
+  if (error || !data) {
+    console.error('Could not load the user profile:', error);
+    throw new Error('Your account exists, but its profile could not be loaded. Run supabase-setup.sql in the Supabase SQL Editor, then sign in again.');
+  }
+
+  const allowedRoles = ['USER', 'TECHNICIAN', 'ADMIN'];
+  const roleValue = String(data.role || 'USER').toUpperCase();
+  const role = allowedRoles.includes(roleValue) ? roleValue : 'USER';
+
+  return {
+    id: authUser.id,
+    email: authUser.email || '',
+    name: data.full_name || authUser.user_metadata?.full_name || authUser.email || 'User',
+    role,
+    title: role === 'ADMIN' ? 'Administrator' : role === 'TECHNICIAN' ? 'Technician' : 'User',
+    techId: data.technician_id || '',
+    department: data.department || '',
+    phone: data.phone || ''
+  };
+}
+
+async function enterAuthenticatedSession(authUser, fresh) {
+  user = await fetchUserProfile(authUser);
+  $('#loginView').hidden = true;
+  $('#appView').hidden = false;
+  document.body.setAttribute('data-role', user.role);
+  fillUserChips();
+  checkDeadlines();
+  renderBell();
+  if (fresh || !location.hash) history.replaceState(null, '', '#/dashboard');
+  route();
+  if (fresh) toast(`Welcome, ${displayName()}.`);
+}
+
+async function handleLogin(e) {
+  e.preventDefault();
+  showAuthMessage('loginError', '');
+  const email = val('loginEmail').trim().toLowerCase();
+  const password = val('loginPassword');
+  if (!email || !password) {
+    showAuthMessage('loginError', 'Enter your email address and password.');
+    return;
+  }
+  if (!supabaseClient) {
+    showAuthMessage('loginError', 'Supabase could not load. Check your internet connection and refresh the page.');
+    return;
+  }
+
+  const button = $('#loginBtn');
+  setAuthButton(button, true, 'Sign in');
+  try {
+    const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
+    if (error) throw error;
+    if (!data.user) throw new Error('Supabase did not return a user account.');
+    await enterAuthenticatedSession(data.user, true);
+    $('#loginForm').reset();
+  } catch (error) {
+    showAuthMessage('loginError', authErrorMessage(error));
+  } finally {
+    setAuthButton(button, false, 'Sign in');
+  }
+}
+
+async function handleSignup(e) {
+  e.preventDefault();
+  showAuthMessage('registerError', '');
+  showAuthMessage('registerSuccess', '');
+
+  const name = val('registerName').trim();
+  const email = val('registerEmail').trim().toLowerCase();
+  const password = val('registerPassword');
+  const confirmPassword = val('registerPasswordConfirm');
+
+  if (!name || !email || !password || !confirmPassword) {
+    showAuthMessage('registerError', 'Complete every field before creating your account.');
+    return;
+  }
+  if (password.length < 8) {
+    showAuthMessage('registerError', 'Your password must contain at least 8 characters.');
+    return;
+  }
+  if (password !== confirmPassword) {
+    showAuthMessage('registerError', 'The passwords do not match.');
+    $('#registerPasswordConfirm').focus();
+    return;
+  }
+  if (!supabaseClient) {
+    showAuthMessage('registerError', 'Supabase could not load. Check your internet connection and refresh the page.');
+    return;
+  }
+
+  const button = $('#registerBtn');
+  setAuthButton(button, true, 'Create account');
+  try {
+    const { data, error } = await supabaseClient.auth.signUp({
+      email,
+      password,
+      options: {
+        data: { full_name: name },
+        emailRedirectTo: window.location.href.split('#')[0]
+      }
+    });
+    if (error) throw error;
+
+    if (data.session && data.user) {
+      await enterAuthenticatedSession(data.user, true);
+      $('#registerForm').reset();
+    } else {
+      showAuthMessage('registerSuccess',
+        'Account created. Check your email for the confirmation link, then return here and sign in.');
+      $('#registerForm').reset();
+    }
+  } catch (error) {
+    showAuthMessage('registerError', authErrorMessage(error));
+  } finally {
+    setAuthButton(button, false, 'Create account');
+  }
+}
+
+async function logout() {
+  closeModal();
+  closeConfirm();
+  if (!supabaseClient) return;
+  const { error } = await supabaseClient.auth.signOut();
+  if (error) {
+    toast(authErrorMessage(error), 'error');
+    return;
+  }
+  user = null;
+  document.body.removeAttribute('data-role');
+  $('#appView').hidden = true;
+  $('#loginView').hidden = false;
+  closeSidebar();
+  if (location.hash) history.replaceState(null, '', location.pathname + location.search);
+  switchAuthMode('signin');
+  $('#loginEmail').focus();
+  toast('You have been signed out.', 'info');
+}
+
+/* ---------------------------------------------------------
+   7. UI primitives: toast, modal, confirm, forms
+--------------------------------------------------------- */
+function toast(msg, type = 'success') {
+  const box = $('#toasts');
+  if (!box) return;
+  const el = document.createElement('div');
+  el.className = `toast toast-${type}`;
+  const icon = type === 'error' ? 'fa-circle-exclamation' : type === 'info' ? 'fa-circle-info' : 'fa-circle-check';
+  el.innerHTML = `<i class="fa-solid ${icon}" aria-hidden="true"></i><span>${esc(msg)}</span>`;
+  box.appendChild(el);
+  setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 320); }, 3800);
+}
+
+let lastFocus = null;
+function openModal({ title, body, size = 'md' }) {
+  if ($('#modalOverlay').hidden) lastFocus = document.activeElement;
+  $('#modalTitle').textContent = title;
+  $('#modalBody').innerHTML = body;
+  $('#modal').className = `modal modal-${size}`;
+  $('#modalOverlay').hidden = false;
+  document.body.classList.add('no-scroll');
+  const first = $('#modalForm input:not([type=hidden]), #modalForm select, #modalForm textarea');
+  (first || $('#modal')).focus();
+}
+function closeModal() {
+  if ($('#modalOverlay').hidden) return;
+  $('#modalOverlay').hidden = true;
+  $('#modalBody').innerHTML = '';
+  document.body.classList.remove('no-scroll');
+  if (lastFocus && document.contains(lastFocus)) { try { lastFocus.focus(); } catch (e) { /* ignore */ } }
+}
+
+let confirmCb = null;
+function confirmDialog({ title, message, confirmLabel = 'Delete', tone = 'danger', onConfirm }) {
+  confirmCb = onConfirm;
+  $('#confirmTitle').textContent = title;
+  $('#confirmMsg').textContent = message;
+  const ok = $('#confirmOk');
+  ok.textContent = confirmLabel;
+  ok.className = `btn btn-${tone}`;
+  $('#confirmOverlay').hidden = false;
+  ok.focus();
+}
+function closeConfirm() {
+  $('#confirmOverlay').hidden = true;
+  confirmCb = null;
+}
+
+const opts = arr => arr.map(o => (typeof o === 'string' ? { value: o, label: o } : o));
+
+function fieldHTML(f, values) {
+  const raw = values[f.name];
+  const v = raw !== undefined && raw !== null ? raw : (f.default !== undefined ? f.default : '');
+  const id = `f_${f.name}`;
+  const req = f.required ? ' required' : '';
+  const err = `<small class="field-error" id="err_${f.name}" hidden></small>`;
+  const label = `<label for="${id}">${esc(f.label)}${f.required ? ' <span class="req" aria-hidden="true">*</span>' : ''}</label>`;
+  const cls = `form-field${f.full ? ' full' : ''}`;
+  const attrs = `id="${id}" name="${f.name}" aria-describedby="err_${f.name}"${req}`;
+  let control;
+
+  switch (f.type) {
+    case 'static':
+      return `<div class="${cls}"><span class="form-label-static" style="font-size:.88rem;font-weight:600">${esc(f.label)}</span><div class="static-value">${esc(f.text)}</div></div>`;
+    case 'textarea':
+      control = `<textarea ${attrs} rows="${f.rows || 3}" placeholder="${esc(f.placeholder || '')}">${esc(v)}</textarea>`;
+      break;
+    case 'select':
+      control = `<select ${attrs}>` +
+        (f.placeholder !== undefined ? `<option value="">${esc(f.placeholder)}</option>` : '') +
+        opts(f.options).map(o => `<option value="${esc(o.value)}"${String(o.value) === String(v) ? ' selected' : ''}${o.disabled ? ' disabled' : ''}>${esc(o.label)}</option>`).join('') +
+        '</select>';
+      break;
+    case 'range':
+      control = `<div class="range-row"><input ${attrs} type="range" min="0" max="100" step="5" value="${esc(v || 0)}"><output id="out_${f.name}" for="${id}">${esc(v || 0)}%</output></div>`;
+      break;
+    default:
+      control = `<input ${attrs} type="${f.type || 'text'}" value="${esc(v)}" placeholder="${esc(f.placeholder || '')}"${f.list ? ` list="${f.list}"` : ''}${f.min !== undefined ? ` min="${f.min}"` : ''}${f.type === 'number' ? ' step="any" inputmode="decimal"' : ''}>`;
+  }
+  return `<div class="${cls}">${label}${control}${f.help ? `<small class="field-help">${esc(f.help)}</small>` : ''}${err}</div>`;
+}
+
+function validateForm(form, fields) {
+  let firstBad = null;
+  fields.forEach(f => {
+    if (f.type === 'static') return;
+    const el = form.elements[f.name];
+    if (!el) return;
+    const errEl = form.querySelector(`#err_${f.name}`);
+    const v = String(el.value || '').trim();
+    let msg = '';
+    if (f.required && !v) msg = `${f.label} is required.`;
+    else if (v && f.type === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) msg = 'Enter a valid email address.';
+    else if (v && f.type === 'tel' && !/^[+\d][\d\s()-]{6,}$/.test(v)) msg = 'Enter a valid phone number.';
+    else if (v && f.type === 'number' && (isNaN(Number(v)) || (f.min !== undefined && Number(v) < f.min))) msg = `${f.label} must be a number${f.min !== undefined ? ' of at least ' + f.min : ''}.`;
+    el.setAttribute('aria-invalid', msg ? 'true' : 'false');
+    if (errEl) { errEl.textContent = msg; errEl.hidden = !msg; }
+    if (msg && !firstBad) firstBad = el;
+  });
+  if (firstBad) firstBad.focus();
+  return !firstBad;
+}
+
+function openForm({ title, fields, values = {}, submitLabel = 'Save', size = 'lg', onSubmit, after }) {
+  const body = `<form id="modalForm" class="form-grid" novalidate>
+    ${fields.map(f => fieldHTML(f, values)).join('')}
+    <div id="formError" class="form-error full" role="alert" hidden></div>
+    <div class="modal-foot full">
+      <button type="button" class="btn btn-outline" data-action="close-modal">Cancel</button>
+      <button type="submit" class="btn btn-primary">${esc(submitLabel)}</button>
+    </div>
+  </form>`;
+  openModal({ title, body, size });
+  const form = $('#modalForm');
+  form.addEventListener('input', e => {
+    const el = e.target;
+    if (el.getAttribute('aria-invalid') === 'true') {
+      el.setAttribute('aria-invalid', 'false');
+      const er = form.querySelector(`#err_${el.name}`);
+      if (er) er.hidden = true;
+    }
+    if (el.type === 'range') { const out = form.querySelector(`#out_${el.name}`); if (out) out.textContent = `${el.value}%`; }
+  });
+  form.addEventListener('submit', e => {
+    e.preventDefault();
+    const box = $('#formError');
+    box.hidden = true;
+    if (!validateForm(form, fields)) return;
+    const data = {};
+    fields.forEach(f => { if (f.type !== 'static' && form.elements[f.name]) data[f.name] = String(form.elements[f.name].value).trim(); });
+    const problem = onSubmit(data);
+    if (typeof problem === 'string' && problem) { box.textContent = problem; box.hidden = false; return; }
+    closeModal();
+  });
+  if (after) after(form);
+}
+
+function emptyState(icon, title, text, actionHtml = '') {
+  return `<span class="chip-icon"><i class="fa-solid ${icon}" aria-hidden="true"></i></span><h3>${esc(title)}</h3><p>${esc(text)}</p>${actionHtml}`;
+}
+
+/* ---------------------------------------------------------
+   8. Permissions and data scoping
+--------------------------------------------------------- */
+const isAdmin = () => !!user && user.role === 'ADMIN';
+function requireAdmin() {
+  if (isAdmin()) return true;
+  toast('Only administrators can do that.', 'error');
+  return false;
+}
+const techById = id => db.technicians.find(t => t.id === id);
+const techName = id => { const t = techById(id); return t ? t.name : ''; };
+const reportTechName = r => techName(r.technicianId) || r.technicianName || 'Unknown technician';
+const techLabel = id => (techName(id) ? esc(techName(id)) : '<span class="unassigned">Unassigned</span>');
+
+function scopedTickets() { return isAdmin() ? db.tickets : db.tickets.filter(t => t.technicianId === user.techId); }
+function scopedProjects() {
+  if (isAdmin()) return db.projects;
+  const me = techById(user.techId);
+  return me ? db.projects.filter(p => p.team === me.team) : [];
+}
+function scopedReports() { return isAdmin() ? db.reports : db.reports.filter(r => r.technicianId === user.techId); }
+const canSeeTicket = t => isAdmin() || t.technicianId === user.techId;
+const canEditReport = r => isAdmin() || r.technicianId === user.techId;
+
+/* ---------------------------------------------------------
+   9. Notifications
+--------------------------------------------------------- */
+function notify(text, type = 'system', audience = 'ADMIN', link = null) {
+  const prefs = { ticket: 'notifTicket', project: 'notifProject', report: 'notifReport' };
+  if (prefs[type] && settings[prefs[type]] === false) return;
+  db.notifications.unshift({ id: uid('N'), text, type, audience, time: new Date().toISOString(), read: false, link });
+  db.notifications = db.notifications.slice(0, 100);
+  saveDb('notifications');
+}
+function myNotifications() {
+  return db.notifications
+    .filter(n => n.audience === 'ALL' || (isAdmin() && n.audience === 'ADMIN') || (user && n.audience === user.techId))
+    .sort((a, b) => new Date(b.time) - new Date(a.time));
+}
+const NOTE_ICON = { ticket: ['fa-ticket', 'orange'], project: ['fa-diagram-project', 'violet'], report: ['fa-clipboard-list', 'blue'], system: ['fa-circle-info', 'gray'] };
+function noteItem(n) {
+  const [icon, tone] = NOTE_ICON[n.type] || NOTE_ICON.system;
+  return `<li><button type="button" class="notif-item${n.read ? '' : ' unread'}" data-action="open-notification" data-id="${esc(n.id)}">
+    <span class="chip-icon tone-${tone}"><i class="fa-solid ${icon}" aria-hidden="true"></i></span>
+    <span><p>${esc(n.text)}</p><small>${esc(timeAgo(n.time))}</small></span>
+    ${n.read ? '' : '<span class="notif-dot" aria-label="Unread"></span>'}
+  </button></li>`;
+}
+function renderBell() {
+  const list = myNotifications();
+  const unread = list.filter(n => !n.read).length;
+  const bc = $('#bellCount'), nc = $('#navNotifCount');
+  bc.textContent = unread > 9 ? '9+' : unread; bc.hidden = !unread;
+  nc.textContent = unread; nc.hidden = !unread;
+  $('#bellBtn').setAttribute('aria-label', unread ? `Notifications, ${unread} unread` : 'Notifications');
+  $('#bellList').innerHTML = list.length ? list.slice(0, 7).map(noteItem).join('') : '<li class="sr-empty">You are all caught up.</li>';
+}
+function renderNotificationsPage() {
+  const list = myNotifications();
+  $('#notifPage').innerHTML = list.map(noteItem).join('');
+  const empty = $('#notifEmpty');
+  empty.hidden = list.length > 0;
+  if (!list.length) empty.innerHTML = emptyState('fa-bell-slash', 'No notifications', 'New tickets, project deadlines and field reports will appear here.');
+}
+function markAllRead() {
+  const mine = new Set(myNotifications().map(n => n.id));
+  db.notifications.forEach(n => { if (mine.has(n.id)) n.read = true; });
+  saveDb('notifications');
+  refresh();
+}
+function checkDeadlines() {
+  let changed = false;
+  db.projects.forEach(p => {
+    if (p.status === 'Completed' || p.deadlineNotified) return;
+    const d = daysUntil(p.deadline);
+    if (d !== null && d >= 0 && d <= 7) {
+      notify(`Project deadline approaching: ${p.id} is due ${d === 0 ? 'today' : `in ${d} day${d === 1 ? '' : 's'}`}.`, 'project', 'ADMIN', { kind: 'project', id: p.id });
+      p.deadlineNotified = true;
+      changed = true;
+    }
+  });
+  if (changed) saveDb('projects');
+}
+
+/* ---------------------------------------------------------
+   10. Statistics & chart helpers
+--------------------------------------------------------- */
+function ticketCounts(list) {
+  const c = { open: 0, progress: 0, done: 0 };
+  list.forEach(t => {
+    if (['Open', 'Assigned'].includes(t.status)) c.open++;
+    else if (['In Progress', 'On Hold'].includes(t.status)) c.progress++;
+    else c.done++;
+  });
+  return c;
+}
+function avgResponse(list) {
+  const times = list.filter(t => t.respondedAt).map(t => new Date(t.respondedAt) - new Date(t.created)).filter(ms => ms >= 0);
+  return times.length ? times.reduce((a, b) => a + b, 0) / times.length : null;
+}
+const activeTicketCount = id => db.tickets.filter(t => t.technicianId === id && !['Resolved', 'Closed'].includes(t.status)).length;
+
+function statCard(c) {
+  const inner = `<span class="chip-icon tone-${c.tone}"><i class="fa-solid ${c.icon}" aria-hidden="true"></i></span><div><strong>${esc(c.value)}</strong><span>${esc(c.label)}</span></div>`;
+  return c.page ? `<a class="stat" href="#/${c.page}" title="${esc(c.hint || '')}">${inner}</a>` : `<div class="stat" title="${esc(c.hint || '')}">${inner}</div>`;
+}
+
+function donutChart(segments) {
+  const total = segments.reduce((s, x) => s + x.value, 0);
+  if (!total) return '<p class="chart-empty">No tickets to chart yet.</p>';
+  const R = 40, C = 2 * Math.PI * R;
+  let offset = 0;
+  const arcs = segments.filter(s => s.value > 0).map(s => {
+    const len = (s.value / total) * C;
+    const el = `<circle cx="60" cy="60" r="${R}" fill="none" stroke="${s.color}" stroke-width="18" stroke-dasharray="${len.toFixed(2)} ${(C - len).toFixed(2)}" stroke-dashoffset="${(-offset).toFixed(2)}" transform="rotate(-90 60 60)"></circle>`;
+    offset += len;
+    return el;
+  }).join('');
+  const legend = segments.map(s => `<li><i style="background:${s.color}"></i>${esc(s.label)}<b>${s.value}</b></li>`).join('');
+  return `<div class="donut-wrap">
+    <svg class="donut" viewBox="0 0 120 120" role="img" aria-label="Ticket status chart, ${total} tickets in total">
+      ${arcs}<text class="donut-total" x="60" y="61" text-anchor="middle">${total}</text><text class="donut-cap" x="60" y="73" text-anchor="middle">tickets</text>
+    </svg>
+    <ul class="legend">${legend}</ul></div>`;
+}
+function barList(items) {
+  const max = Math.max(1, ...items.map(i => i.value));
+  if (!items.length || items.every(i => !i.value)) return '<p class="chart-empty">Nothing to show for this period.</p>';
+  return `<div class="bars">${items.map(i => `<div class="bar-row"><span title="${esc(i.label)}">${esc(i.label)}</span><div class="bar-track"><span style="width:${(i.value / max) * 100}%"></span></div><b>${i.value}</b></div>`).join('')}</div>`;
+}
+function columnChart(items) {
+  const max = Math.max(1, ...items.map(i => i.value));
+  return `<div class="cols" role="img" aria-label="Tickets logged per day for the last 7 days">${items.map(i =>
+    `<div class="col"><b>${i.value}</b><div class="col-bar${i.value ? '' : ' zero'}" style="height:${i.value ? Math.max(8, (i.value / max) * 130) : 3}px"></div><small>${esc(i.label)}</small></div>`).join('')}</div>`;
+}
+function statusSegments(list) {
+  return TICKET_STATUSES.map(s => ({ label: s, value: list.filter(t => t.status === s).length, color: STATUS_COLORS[s] }));
+}
+function dueInfo(t) {
+  if (['Resolved', 'Closed'].includes(t.status)) return { text: fmtDate(t.due), over: false };
+  const d = daysUntil(t.due);
+  return { text: fmtDate(t.due), over: d !== null && d < 0 };
+}
+function deadlineInfo(p) {
+  if (p.status === 'Completed') return { text: 'Completed', tone: 'good' };
+  const d = daysUntil(p.deadline);
+  if (d === null) return { text: 'No deadline', tone: '' };
+  if (d < 0) return { text: `Overdue by ${-d} day${d === -1 ? '' : 's'}`, tone: 'bad' };
+  if (d === 0) return { text: 'Due today', tone: 'warn' };
+  return { text: `${d} day${d === 1 ? '' : 's'} left`, tone: d <= 7 ? 'warn' : '' };
+}
+
+/* ---------------------------------------------------------
+   11. Routing and page rendering
+--------------------------------------------------------- */
+const PAGES = {
+  dashboard: { render: () => renderDashboard() },
+  helpdesk: { render: () => renderHelpdesk() },
+  projects: { render: () => renderProjects() },
+  reports: { render: () => renderReports() },
+  technicians: { render: () => renderTechnicians() },
+  analytics: { render: () => renderAnalytics() },
+  notifications: { render: () => renderNotificationsPage() },
+  settings: { render: () => renderSettings() }
+};
+
+function navigate(page) {
+  if (location.hash !== `#/${page}`) location.hash = `#/${page}`;
+  else route();
+}
+function route() {
+  if (!user) return;
+  let page = location.hash.replace(/^#\/?/, '').split('?')[0] || 'dashboard';
+  if (!PAGES[page]) page = 'dashboard';
+  if (!isAdmin() && ADMIN_ONLY_PAGES.includes(page)) {
+    toast('That page is only available to administrators.', 'error');
+    page = 'dashboard';
+    history.replaceState(null, '', '#/dashboard');
+  }
+  showPage(page);
+}
+function showPage(page) {
+  currentPage = page;
+  $$('.page').forEach(p => { p.hidden = p.id !== `page-${page}`; });
+  $$('.nav-link').forEach(a => {
+    const on = a.dataset.page === page;
+    a.classList.toggle('active', on);
+    if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+  });
+  const titles = { dashboard: 'Dashboard', helpdesk: 'Help Desk', projects: 'Projects', reports: 'Field Reports', technicians: 'Technicians', analytics: 'Analytics', notifications: 'Notifications', settings: 'Settings' };
+  document.title = `${titles[page]} | WorkOrder`;
+  closeSidebar();
+  closeBell();
+  hideSearch();
+  PAGES[page].render();
+  window.scrollTo(0, 0);
+}
+function refresh() {
+  if (!user) return;
+  renderBell();
+  if (PAGES[currentPage]) PAGES[currentPage].render();
+}
+
+/* ---------- Dashboard ---------- */
+function activityFeed() {
+  const items = [];
+  scopedTickets().forEach(t => (t.log || []).forEach(l => items.push({ t: l.t, text: `${t.id}: ${l.text}`, icon: 'fa-ticket', tone: 'orange', kind: 'ticket', id: t.id })));
+  scopedReports().forEach(r => items.push({ t: r.createdAt || r.date, text: `${r.id} submitted by ${reportTechName(r)}`, icon: 'fa-clipboard-list', tone: 'blue', kind: 'report', id: r.id }));
+  scopedProjects().forEach(p => items.push({ t: p.updatedAt || p.start, text: `${p.id} updated: ${p.status}, ${p.progress}% complete`, icon: 'fa-diagram-project', tone: 'violet', kind: 'project', id: p.id }));
+  return items.filter(i => i.t).sort((a, b) => new Date(b.t) - new Date(a.t)).slice(0, 8);
+}
+
+function renderDashboard() {
+  const tickets = scopedTickets(), projects = scopedProjects(), reports = scopedReports();
+  const h = new Date().getHours();
+  const greet = h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
+  $('#dashTitle').textContent = `${greet}, ${displayName()}`;
+  $('#dashSub').textContent = isAdmin()
+    ? 'Here is where maintenance work stands across the university.'
+    : 'These are the tickets, projects and reports assigned to you.';
+
+  const c = ticketCounts(tickets);
+  const cards = [
+    { label: 'Open tickets', value: c.open, icon: 'fa-envelope-open-text', tone: 'orange', page: 'helpdesk', hint: 'Open and assigned' },
+    { label: 'In progress', value: c.progress, icon: 'fa-screwdriver-wrench', tone: 'blue', page: 'helpdesk', hint: 'In progress and on hold' },
+    { label: 'Completed tickets', value: c.done, icon: 'fa-circle-check', tone: 'green', page: 'helpdesk', hint: 'Resolved and closed' },
+    { label: 'Active projects', value: projects.filter(p => p.status === 'In Progress').length, icon: 'fa-diagram-project', tone: 'violet', page: 'projects' },
+    { label: 'Completed projects', value: projects.filter(p => p.status === 'Completed').length, icon: 'fa-flag-checkered', tone: 'teal', page: 'projects' },
+    { label: 'Field reports', value: reports.length, icon: 'fa-clipboard-list', tone: 'slate', page: 'reports' },
+    { label: 'Average response time', value: fmtDuration(avgResponse(tickets)), icon: 'fa-stopwatch', tone: 'gold', hint: 'From logging a ticket to first action' }
+  ];
+  $('#statsGrid').innerHTML = cards.map(statCard).join('');
+
+  $('#chartStatus').innerHTML = donutChart(statusSegments(tickets));
+  const days = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(); d.setDate(d.getDate() - i);
+    const key = toDateStr(d);
+    days.push({ label: d.toLocaleDateString('en-GB', { weekday: 'short' }), value: tickets.filter(t => toDateStr(new Date(t.created)) === key).length });
+  }
+  $('#chartWeek').innerHTML = columnChart(days);
+
+  const recent = tickets.slice().sort((a, b) => new Date(b.created) - new Date(a.created)).slice(0, 5);
+  $('#dashTickets').innerHTML = recent.length
+    ? `<ul class="mini-list">${recent.map(t => `<li><button type="button" class="mini-row" data-action="view-ticket" data-id="${esc(t.id)}">
+        <span class="chip-icon tone-blue"><i class="fa-solid ${catIcon(t.category)}" aria-hidden="true"></i></span>
+        <span class="mini-main"><b>${esc(t.title)}</b><small>${esc(t.id)} in ${esc(t.location)}</small></span>${badge(t.priority)}${badge(t.status)}</button></li>`).join('')}</ul>`
+    : '<p class="mini-empty">No tickets yet.</p>';
+
+  $('#dashActivity').innerHTML = activityFeed().map(a => `<li><span class="chip-icon tone-${a.tone}"><i class="fa-solid ${a.icon}" aria-hidden="true"></i></span>
+    <div><button type="button" data-action="open-record" data-kind="${a.kind}" data-id="${esc(a.id)}">${esc(a.text)}</button><small>${esc(timeAgo(a.t))}</small></div></li>`).join('') || '<li class="mini-empty">No activity yet.</li>';
+
+  const active = projects.filter(p => p.status === 'In Progress').slice(0, 4);
+  $('#dashProjects').innerHTML = active.length
+    ? `<ul class="mini-list">${active.map(p => `<li><button type="button" class="mini-row" data-action="view-project" data-id="${esc(p.id)}">
+        <span class="mini-main"><b>${esc(p.name)}</b><small>${esc(p.team)}</small>
+        <span class="mini-progress"><span class="progress"><span style="width:${p.progress}%"></span></span><small>${p.progress}%</small></span></span></button></li>`).join('')}</ul>`
+    : '<p class="mini-empty">No active projects.</p>';
+
+  const recentReports = reports.slice().sort((a, b) => new Date(b.createdAt || b.date) - new Date(a.createdAt || a.date)).slice(0, 4);
+  $('#dashReports').innerHTML = recentReports.length
+    ? `<ul class="mini-list">${recentReports.map(r => `<li><button type="button" class="mini-row" data-action="view-report" data-id="${esc(r.id)}">
+        <span class="mini-main"><b>${esc(r.problem)}</b><small>${esc(r.id)} by ${esc(reportTechName(r))}, ${esc(fmtDate(r.date))}</small></span>${badge(r.status)}</button></li>`).join('')}</ul>`
+    : '<p class="mini-empty">No field reports yet.</p>';
+}
+
+/* ---------- Help desk ---------- */
+function filteredTickets() {
+  const q = val('ticketSearch').trim().toLowerCase(), st = val('ticketStatus'), pr = val('ticketPriority'), cat = val('ticketCategory');
+  return scopedTickets().filter(t =>
+    (!st || t.status === st) && (!pr || t.priority === pr) && (!cat || t.category === cat) &&
+    (!q || [t.id, t.title, t.requester, t.department, t.location, t.category, t.description, techName(t.technicianId)].join(' ').toLowerCase().includes(q))
+  ).sort((a, b) => new Date(b.created) - new Date(a.created));
+}
+function renderHelpdesk() {
+  const list = filteredTickets();
+  const total = scopedTickets().length;
+  $('#ticketRows').innerHTML = list.map(t => {
+    const due = dueInfo(t);
+    return `<tr>
+      <td data-label="Ticket"><span class="mono id">${esc(t.id)}</span></td>
+      <td data-label="Issue"><button type="button" class="link-btn cell-title" data-action="view-ticket" data-id="${esc(t.id)}">${esc(t.title)}</button><span class="cell-sub">${esc(t.requester)}, ${esc(t.department)}</span></td>
+      <td data-label="Category"><i class="fa-solid ${catIcon(t.category)}" aria-hidden="true" style="color:var(--blue);margin-right:6px"></i>${esc(t.category)}</td>
+      <td data-label="Location">${esc(t.location)}</td>
+      <td data-label="Priority">${badge(t.priority)}</td>
+      <td data-label="Technician">${techLabel(t.technicianId)}</td>
+      <td data-label="Due"><span class="${due.over ? 'due-over' : ''}">${esc(due.text)}</span>${due.over ? '<span class="chip-flag">Overdue</span>' : ''}</td>
+      <td data-label="Status">${badge(t.status)}</td>
+      <td data-label=""><span class="row-actions">
+        <button type="button" class="icon-btn" data-action="view-ticket" data-id="${esc(t.id)}" aria-label="View ticket ${esc(t.id)}" title="View"><i class="fa-regular fa-eye"></i></button>
+        <button type="button" class="icon-btn admin-only" data-action="edit-ticket" data-id="${esc(t.id)}" aria-label="Edit ticket ${esc(t.id)}" title="Edit"><i class="fa-regular fa-pen-to-square"></i></button>
+        <button type="button" class="icon-btn danger admin-only" data-action="delete-ticket" data-id="${esc(t.id)}" aria-label="Delete ticket ${esc(t.id)}" title="Delete"><i class="fa-regular fa-trash-can"></i></button>
+      </span></td></tr>`;
+  }).join('');
+  $('.table-wrap', $('#page-helpdesk')).hidden = !list.length;
+  const empty = $('#ticketEmpty');
+  empty.hidden = list.length > 0;
+  if (!list.length) {
+    empty.innerHTML = total
+      ? emptyState('fa-filter-circle-xmark', 'No tickets match your filters', 'Try a different search term or clear the filters.', '<button type="button" class="btn btn-outline" data-action="clear-filters" data-id="helpdesk">Clear filters</button>')
+      : emptyState('fa-inbox', isAdmin() ? 'No tickets yet' : 'No tickets assigned to you', isAdmin() ? 'Create the first maintenance ticket to start tracking work.' : 'Tickets assigned to you by the administrator will appear here.',
+        isAdmin() ? '<button type="button" class="btn btn-primary" data-action="new-ticket"><i class="fa-solid fa-plus"></i> New ticket</button>' : '');
+  }
+  $('#ticketCount').textContent = `Showing ${list.length} of ${total} ticket${total === 1 ? '' : 's'}`;
+}
+
+function techOptions(currentId) {
+  return db.technicians.map(x => ({
+    value: x.id,
+    label: `${x.name}, ${x.specialization} (${x.status}, ${activeTicketCount(x.id)} active)`,
+    disabled: x.status === 'On Leave' && x.id !== currentId
+  }));
+}
+
+function openTicketForm(id) {
+  if (!requireAdmin()) return;
+  const t = id ? db.tickets.find(x => x.id === id) : null;
+  if (id && !t) return toast('Ticket not found.', 'error');
+  closeModal();
+  const fields = [
+    { name: 'requester', label: 'Requester name', required: true, placeholder: 'e.g. Dr. A. Ogunleye' },
+    { name: 'department', label: 'Department or unit', required: true, list: 'dl-departments' },
+    { name: 'contact', label: 'Contact phone or email', required: true, placeholder: '0803 000 0000' },
+    { name: 'category', label: 'Category', type: 'select', required: true, options: CATEGORIES },
+    { name: 'title', label: 'Issue title', required: true, full: true, placeholder: 'Short summary of the fault' },
+    { name: 'description', label: 'Description', type: 'textarea', required: true, full: true, rows: 4, placeholder: 'What is wrong, and since when?' },
+    { name: 'location', label: 'Location', required: true, list: 'dl-locations', placeholder: 'Building, floor or room' },
+    { name: 'priority', label: 'Priority', type: 'select', required: true, options: PRIORITIES, default: 'Medium' },
+    { name: 'technicianId', label: 'Assigned technician', type: 'select', placeholder: 'Unassigned', options: techOptions(t && t.technicianId) },
+    { name: 'due', label: 'Due date', type: 'date', required: true, default: daysFromNow(3) },
+    { name: 'status', label: 'Status', type: 'select', required: true, options: TICKET_STATUSES, default: 'Open' }
+  ];
+  openForm({
+    title: t ? `Edit ticket ${t.id}` : 'New maintenance ticket',
+    submitLabel: t ? 'Save changes' : 'Create ticket',
+    fields, values: t || {},
+    onSubmit: data => {
+      const floor = t ? toDateStr(new Date(t.created)) : today();
+      if (data.due < floor) return t ? 'The due date cannot be earlier than the date the ticket was created.' : 'The due date cannot be in the past.';
+      const now = new Date().toISOString();
+      if (t) {
+        const keys = ['requester', 'department', 'contact', 'category', 'title', 'description', 'location', 'priority', 'due'];
+        const changed = keys.some(k => t[k] !== data[k]);
+        keys.forEach(k => { t[k] = data[k]; });
+        if (changed) t.log.push({ t: now, text: `Ticket details edited by ${displayName()}` });
+        applyTicketChanges(t, { status: data.status, technicianId: data.technicianId });
+        saveDb('tickets');
+        toast(`Ticket ${t.id} updated.`);
+      } else {
+        const n = {
+          id: nextId('HD', db.tickets, 1001), requester: data.requester, department: data.department, contact: data.contact,
+          title: data.title, description: data.description, category: data.category, location: data.location, priority: data.priority,
+          technicianId: '', created: now, due: data.due, status: 'Open', respondedAt: null, resolvedAt: null,
+          log: [{ t: now, text: `Ticket created by ${displayName()}` }]
+        };
+        db.tickets.push(n);
+        applyTicketChanges(n, { status: data.status, technicianId: data.technicianId });
+        const high = ['High', 'Critical'].includes(n.priority);
+        notify(high ? `New high-priority maintenance ticket received: ${n.id}, ${n.title}.` : `New maintenance ticket logged: ${n.id}, ${n.title}.`, 'ticket', 'ADMIN', { kind: 'ticket', id: n.id });
+        saveDb('tickets');
+        toast(`Ticket ${n.id} created.`);
+      }
+      refresh();
+    }
+  });
+}
+
+/* Applies status/technician changes with automatic rules, logging and notifications. */
+function applyTicketChanges(t, { status, technicianId }) {
+  const origStatus = t.status;
+  const now = new Date().toISOString();
+  const actor = displayName();
+  const link = { kind: 'ticket', id: t.id };
+
+  if (technicianId !== undefined && technicianId !== (t.technicianId || '')) {
+    const prev = t.technicianId;
+    t.technicianId = technicianId;
+    if (technicianId) {
+      t.log.push({ t: now, text: `Assigned to ${techName(technicianId)} by ${actor}` });
+      if (!t.respondedAt) t.respondedAt = now;
+      if (t.status === 'Open') t.status = 'Assigned';
+      notify(`Ticket ${t.id} has been assigned to you.`, 'ticket', technicianId, link);
+    } else {
+      t.log.push({ t: now, text: `${techName(prev) || 'Technician'} removed from the ticket by ${actor}` });
+      if (t.status === 'Assigned') t.status = 'Open';
+    }
+  }
+
+  if (status !== undefined && status !== origStatus) {
+    if (t.status !== status) t.log.push({ t: now, text: `Status changed from ${t.status} to ${status} by ${actor}` });
+    t.status = status;
+    if (status !== 'Open' && !t.respondedAt) t.respondedAt = now;
+    if (['Resolved', 'Closed'].includes(status)) { if (!t.resolvedAt) t.resolvedAt = now; } else t.resolvedAt = null;
+    if (status === 'Resolved') notify(`Ticket ${t.id} has been resolved.`, 'ticket', 'ADMIN', link);
+  } else if (t.status !== origStatus) {
+    t.log.push({ t: now, text: `Status set to ${t.status} automatically` });
+  }
+}
+
+function viewTicket(id) {
+  const t = db.tickets.find(x => x.id === id);
+  if (!t || !canSeeTicket(t)) return toast('Ticket not found.', 'error');
+  const admin = isAdmin();
+  const due = dueInfo(t);
+  const statusList = admin ? TICKET_STATUSES : Array.from(new Set([t.status, ...TECH_ALLOWED_STATUSES]));
+  const locked = !admin && t.status === 'Closed';
+  const relatedReports = db.reports.filter(r => r.related === t.id);
+  const body = `
+    <div class="detail-top"><span class="mono id">${esc(t.id)}</span>${badge(t.priority)}${badge(t.status)}${due.over ? '<span class="chip-flag">Overdue</span>' : ''}</div>
+    <h3 class="detail-title">${esc(t.title)}</h3>
+    <dl class="detail-grid">
+      <div><dt>Requester</dt><dd>${esc(t.requester)}</dd></div>
+      <div><dt>Department</dt><dd>${esc(t.department)}</dd></div>
+      <div><dt>Contact</dt><dd>${esc(t.contact)}</dd></div>
+      <div><dt>Category</dt><dd><i class="fa-solid ${catIcon(t.category)}" aria-hidden="true" style="color:var(--blue);margin-right:6px"></i>${esc(t.category)}</dd></div>
+      <div><dt>Location</dt><dd>${esc(t.location)}</dd></div>
+      <div><dt>Assigned technician</dt><dd>${techLabel(t.technicianId)}</dd></div>
+      <div><dt>Date created</dt><dd>${esc(fmtDateTime(t.created))}</dd></div>
+      <div><dt>Due date</dt><dd class="${due.over ? 'due-over' : ''}">${esc(due.text)}</dd></div>
+      <div><dt>Response time</dt><dd>${t.respondedAt ? esc(fmtDuration(new Date(t.respondedAt) - new Date(t.created))) : 'Awaiting first action'}</dd></div>
+      <div><dt>Resolved</dt><dd>${t.resolvedAt ? esc(fmtDateTime(t.resolvedAt)) : '—'}</dd></div>
+    </dl>
+    <div class="detail-block"><h3>Description</h3><p>${esc(t.description)}</p></div>
+
+    <form id="manageForm" class="manage" novalidate>
+      <div class="form-field"><label for="mStatus">Status</label>
+        <select id="mStatus"${locked ? ' disabled' : ''}>${statusList.map(s => `<option${s === t.status ? ' selected' : ''}>${esc(s)}</option>`).join('')}</select></div>
+      ${admin ? `<div class="form-field"><label for="mTech">Assigned technician</label>
+        <select id="mTech"><option value="">Unassigned</option>${opts(techOptions(t.technicianId)).map(o => `<option value="${esc(o.value)}"${o.value === t.technicianId ? ' selected' : ''}${o.disabled ? ' disabled' : ''}>${esc(o.label)}</option>`).join('')}</select></div>` : ''}
+      <button type="submit" class="btn btn-primary"${locked ? ' disabled' : ''}>Save changes</button>
+    </form>
+
+    ${relatedReports.length ? `<div class="detail-block"><h3>Field reports</h3><div class="link-list">${relatedReports.map(r => `<button type="button" class="pill-btn" data-action="view-report" data-id="${esc(r.id)}">${esc(r.id)}</button>`).join('')}</div></div>` : ''}
+
+    <div class="detail-block"><h3>Activity</h3>
+      <ul class="timeline">${(t.log || []).slice().reverse().map(l => `<li>${esc(l.text)}<small>${esc(fmtDateTime(l.t))}</small></li>`).join('')}</ul></div>
+
+    <div class="modal-foot">
+      <button type="button" class="btn btn-outline spacer" data-action="new-report" data-related="${esc(t.id)}"><i class="fa-solid fa-file-pen"></i> Write field report</button>
+      <button type="button" class="btn btn-danger-outline admin-only" data-action="delete-ticket" data-id="${esc(t.id)}"><i class="fa-regular fa-trash-can"></i> Delete</button>
+      <button type="button" class="btn btn-outline admin-only" data-action="edit-ticket" data-id="${esc(t.id)}"><i class="fa-regular fa-pen-to-square"></i> Edit</button>
+      <button type="button" class="btn btn-primary" data-action="close-modal">Close</button>
+    </div>`;
+  openModal({ title: 'Ticket details', body, size: 'lg' });
+  $('#manageForm').addEventListener('submit', e => {
+    e.preventDefault();
+    const changes = { status: $('#mStatus').value };
+    if (admin) changes.technicianId = $('#mTech').value;
+    applyTicketChanges(t, changes);
+    saveDb('tickets');
+    toast(`Ticket ${t.id} updated.`);
+    refresh();
+    viewTicket(t.id);
+  });
+}
+
+function deleteTicket(id) {
+  if (!requireAdmin()) return;
+  const t = db.tickets.find(x => x.id === id);
+  if (!t) return;
+  confirmDialog({
+    title: `Delete ticket ${t.id}?`,
+    message: `"${t.title}" will be permanently removed. This cannot be undone.`,
+    onConfirm: () => {
+      db.tickets = db.tickets.filter(x => x.id !== id);
+      saveDb('tickets');
+      closeModal();
+      toast(`Ticket ${id} deleted.`);
+      refresh();
+    }
+  });
+}
+
+/* ---------- Projects ---------- */
+function filteredProjects() {
+  const q = val('projectSearch').trim().toLowerCase(), st = val('projectStatus'), cat = val('projectCategory');
+  const order = { 'In Progress': 0, 'On Hold': 1, 'Not Started': 2, 'Completed': 3 };
+  return scopedProjects().filter(p =>
+    (!st || p.status === st) && (!cat || p.category === cat) &&
+    (!q || [p.id, p.name, p.description, p.location, p.team, p.category].join(' ').toLowerCase().includes(q))
+  ).sort((a, b) => (order[a.status] - order[b.status]) || (new Date(a.deadline) - new Date(b.deadline)));
+}
+function progressBar(p) {
+  const cls = p.status === 'Completed' ? ' done' : p.status === 'On Hold' ? ' hold' : '';
+  return `<div class="progress${cls}" role="progressbar" aria-label="Progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${p.progress}"><span style="width:${p.progress}%"></span></div>`;
+}
+function renderProjects() {
+  const list = filteredProjects();
+  const total = scopedProjects().length;
+  $('#projectGrid').innerHTML = list.map(p => {
+    const info = deadlineInfo(p);
+    return `<article class="project-card">
+      <header><span class="mono id">${esc(p.id)}</span>${badge(p.status)}</header>
+      <h3><button type="button" class="link-btn" data-action="view-project" data-id="${esc(p.id)}">${esc(p.name)}</button></h3>
+      <p class="muted clamp">${esc(p.description)}</p>
+      <ul class="meta">
+        <li><i class="fa-solid fa-location-dot" aria-hidden="true"></i>${esc(p.location)}</li>
+        <li><i class="fa-solid ${catIcon(p.category)}" aria-hidden="true"></i>${esc(p.category)}</li>
+        <li><i class="fa-solid fa-users" aria-hidden="true"></i>${esc(p.team)}</li>
+      </ul>
+      <div class="progress-row">${progressBar(p)}<strong>${p.progress}%</strong></div>
+      <footer>
+        <span class="deadline ${info.tone}"><i class="fa-regular fa-calendar" aria-hidden="true"></i> ${esc(info.text)}</span>
+        <span class="row-actions">
+          <button type="button" class="icon-btn" data-action="view-project" data-id="${esc(p.id)}" aria-label="View project ${esc(p.id)}" title="View"><i class="fa-regular fa-eye"></i></button>
+          <button type="button" class="icon-btn admin-only" data-action="edit-project" data-id="${esc(p.id)}" aria-label="Edit project ${esc(p.id)}" title="Edit"><i class="fa-regular fa-pen-to-square"></i></button>
+          <button type="button" class="icon-btn danger admin-only" data-action="delete-project" data-id="${esc(p.id)}" aria-label="Delete project ${esc(p.id)}" title="Delete"><i class="fa-regular fa-trash-can"></i></button>
+        </span>
+      </footer></article>`;
+  }).join('');
+  const empty = $('#projectEmpty');
+  empty.hidden = list.length > 0;
+  if (!list.length) {
+    empty.innerHTML = total
+      ? emptyState('fa-filter-circle-xmark', 'No projects match your filters', 'Try a different search term or clear the filters.', '<button type="button" class="btn btn-outline" data-action="clear-filters" data-id="projects">Clear filters</button>')
+      : emptyState('fa-diagram-project', isAdmin() ? 'No projects yet' : 'No projects for your team', isAdmin() ? 'Create a project to track a larger piece of maintenance work.' : 'Projects assigned to your team will appear here.',
+        isAdmin() ? '<button type="button" class="btn btn-primary" data-action="new-project"><i class="fa-solid fa-plus"></i> New project</button>' : '');
+  }
+}
+
+function normalizeProject(p) {
+  p.progress = Math.max(0, Math.min(100, Number(p.progress) || 0));
+  if (p.status === 'Completed') p.progress = 100;
+  else if (p.progress === 100) p.status = 'Completed';
+  else if (p.status === 'Not Started' && p.progress > 0) p.status = 'In Progress';
+  else if (p.status === 'Not Started') p.progress = 0;
+}
+
+function openProjectForm(id) {
+  if (!requireAdmin()) return;
+  const p = id ? db.projects.find(x => x.id === id) : null;
+  if (id && !p) return toast('Project not found.', 'error');
+  closeModal();
+  const fields = [
+    { name: 'name', label: 'Project name', required: true, full: true, placeholder: 'e.g. Rewiring of Faculty of Arts Block C' },
+    { name: 'description', label: 'Description', type: 'textarea', required: true, full: true, rows: 3 },
+    { name: 'location', label: 'Location', required: true, list: 'dl-locations' },
+    { name: 'category', label: 'Category', type: 'select', required: true, options: CATEGORIES },
+    { name: 'team', label: 'Assigned team', type: 'select', required: true, options: TEAMS },
+    { name: 'budget', label: 'Budget (₦)', type: 'number', min: 0, required: true, default: 0 },
+    { name: 'start', label: 'Start date', type: 'date', required: true, default: today() },
+    { name: 'deadline', label: 'Deadline', type: 'date', required: true, default: daysFromNow(30) },
+    { name: 'status', label: 'Status', type: 'select', required: true, options: PROJECT_STATUSES, default: 'Not Started' },
+    { name: 'progress', label: 'Progress', type: 'range', default: 0 }
+  ];
+  openForm({
+    title: p ? `Edit project ${p.id}` : 'New project',
+    submitLabel: p ? 'Save changes' : 'Create project',
+    fields, values: p || {},
+    onSubmit: data => {
+      if (data.deadline < data.start) return 'The deadline cannot be earlier than the start date.';
+      const now = new Date().toISOString();
+      const fieldsToCopy = { name: data.name, description: data.description, location: data.location, category: data.category, team: data.team, budget: Number(data.budget), start: data.start, deadline: data.deadline, status: data.status, progress: Number(data.progress) };
+      if (p) {
+        if (p.deadline !== data.deadline) p.deadlineNotified = false;
+        Object.assign(p, fieldsToCopy);
+        normalizeProject(p);
+        p.updatedAt = now;
+        toast(`Project ${p.id} updated.`);
+      } else {
+        const n = Object.assign({ id: nextId('PJ', db.projects, 3001), updatedAt: now, deadlineNotified: false }, fieldsToCopy);
+        normalizeProject(n);
+        db.projects.push(n);
+        notify(`New project created: ${n.id}, ${n.name}.`, 'project', 'ADMIN', { kind: 'project', id: n.id });
+        toast(`Project ${n.id} created.`);
+      }
+      saveDb('projects');
+      checkDeadlines();
+      refresh();
+    }
+  });
+}
+
+function viewProject(id) {
+  const p = db.projects.find(x => x.id === id);
+  if (!p || (!isAdmin() && !scopedProjects().includes(p))) return toast('Project not found.', 'error');
+  const info = deadlineInfo(p);
+  const admin = isAdmin();
+  const linked = db.reports.filter(r => r.related === p.id);
+  const body = `
+    <div class="detail-top"><span class="mono id">${esc(p.id)}</span>${badge(p.status)}</div>
+    <h3 class="detail-title">${esc(p.name)}</h3>
+    <div class="progress-row" style="margin-bottom:18px">${progressBar(p)}<strong>${p.progress}%</strong></div>
+    <dl class="detail-grid">
+      <div><dt>Location</dt><dd>${esc(p.location)}</dd></div>
+      <div><dt>Category</dt><dd><i class="fa-solid ${catIcon(p.category)}" aria-hidden="true" style="color:var(--blue);margin-right:6px"></i>${esc(p.category)}</dd></div>
+      <div><dt>Assigned team</dt><dd>${esc(p.team)}</dd></div>
+      <div><dt>Budget</dt><dd>${esc(money(p.budget))}</dd></div>
+      <div><dt>Start date</dt><dd>${esc(fmtDate(p.start))}</dd></div>
+      <div><dt>Deadline</dt><dd>${esc(fmtDate(p.deadline))} <span class="deadline ${info.tone}">(${esc(info.text)})</span></dd></div>
+    </dl>
+    <div class="detail-block"><h3>Description</h3><p>${esc(p.description)}</p></div>
+    ${admin ? `<form id="projectQuick" class="manage" novalidate>
+      <div class="form-field"><label for="qStatus">Status</label><select id="qStatus">${PROJECT_STATUSES.map(s => `<option${s === p.status ? ' selected' : ''}>${esc(s)}</option>`).join('')}</select></div>
+      <div class="form-field"><label for="qProgress">Progress</label><div class="range-row"><input id="qProgress" type="range" min="0" max="100" step="5" value="${p.progress}"><output id="qOut">${p.progress}%</output></div></div>
+      <button type="submit" class="btn btn-primary">Update project</button></form>` : ''}
+    ${linked.length ? `<div class="detail-block"><h3>Field reports</h3><div class="link-list">${linked.map(r => `<button type="button" class="pill-btn" data-action="view-report" data-id="${esc(r.id)}">${esc(r.id)}</button>`).join('')}</div></div>` : ''}
+    <div class="modal-foot">
+      <button type="button" class="btn btn-outline spacer" data-action="new-report" data-related="${esc(p.id)}"><i class="fa-solid fa-file-pen"></i> Write field report</button>
+      <button type="button" class="btn btn-danger-outline admin-only" data-action="delete-project" data-id="${esc(p.id)}"><i class="fa-regular fa-trash-can"></i> Delete</button>
+      <button type="button" class="btn btn-outline admin-only" data-action="edit-project" data-id="${esc(p.id)}"><i class="fa-regular fa-pen-to-square"></i> Edit</button>
+      <button type="button" class="btn btn-primary" data-action="close-modal">Close</button>
+    </div>`;
+  openModal({ title: 'Project details', body, size: 'lg' });
+  if (admin) {
+    $('#qProgress').addEventListener('input', e => { $('#qOut').textContent = `${e.target.value}%`; });
+    $('#projectQuick').addEventListener('submit', e => {
+      e.preventDefault();
+      p.status = $('#qStatus').value;
+      p.progress = Number($('#qProgress').value);
+      normalizeProject(p);
+      p.updatedAt = new Date().toISOString();
+      saveDb('projects');
+      toast(`Project ${p.id} updated.`);
+      refresh();
+      viewProject(p.id);
+    });
+  }
+}
+
+function deleteProject(id) {
+  if (!requireAdmin()) return;
+  const p = db.projects.find(x => x.id === id);
+  if (!p) return;
+  confirmDialog({
+    title: `Delete project ${p.id}?`,
+    message: `"${p.name}" will be permanently removed. This cannot be undone.`,
+    onConfirm: () => {
+      db.projects = db.projects.filter(x => x.id !== id);
+      saveDb('projects');
+      closeModal();
+      toast(`Project ${id} deleted.`);
+      refresh();
+    }
+  });
+}
+
+/* ---------- Field reports ---------- */
+function relatedLabel(id) {
+  if (!id) return '—';
+  const item = db.tickets.find(t => t.id === id) || db.projects.find(p => p.id === id);
+  return item ? `${id}, ${item.title || item.name}` : `${id} (removed)`;
+}
+function filteredReports() {
+  const q = val('reportSearch').trim().toLowerCase(), st = val('reportStatus'), fu = val('reportFollow');
+  return scopedReports().filter(r =>
+    (!st || r.status === st) && (!fu || r.followUp === fu) &&
+    (!q || [r.id, reportTechName(r), r.location, r.problem, r.work, r.materials, r.recommendation, r.related].join(' ').toLowerCase().includes(q))
+  ).sort((a, b) => new Date(b.date) - new Date(a.date) || b.id.localeCompare(a.id));
+}
+function renderReports() {
+  const list = filteredReports();
+  const total = scopedReports().length;
+  $('#reportRows').innerHTML = list.map(r => `<tr>
+    <td data-label="Report"><span class="mono id">${esc(r.id)}</span></td>
+    <td data-label="Technician"><button type="button" class="link-btn cell-title" data-action="view-report" data-id="${esc(r.id)}">${esc(reportTechName(r))}</button><span class="cell-sub">${esc(r.problem.length > 60 ? r.problem.slice(0, 60) + '…' : r.problem)}</span></td>
+    <td data-label="Related job">${esc(r.related || '—')}</td>
+    <td data-label="Location">${esc(r.location)}</td>
+    <td data-label="Date">${esc(fmtDate(r.date))}</td>
+    <td data-label="Follow-up">${r.followUp === 'Yes' ? '<span class="chip-flag">Required</span>' : 'No'}</td>
+    <td data-label="Status">${badge(r.status)}</td>
+    <td data-label=""><span class="row-actions">
+      <button type="button" class="icon-btn" data-action="view-report" data-id="${esc(r.id)}" aria-label="View report ${esc(r.id)}" title="View"><i class="fa-regular fa-eye"></i></button>
+      ${canEditReport(r) ? `<button type="button" class="icon-btn" data-action="edit-report" data-id="${esc(r.id)}" aria-label="Edit report ${esc(r.id)}" title="Edit"><i class="fa-regular fa-pen-to-square"></i></button>` : ''}
+      <button type="button" class="icon-btn danger admin-only" data-action="delete-report" data-id="${esc(r.id)}" aria-label="Delete report ${esc(r.id)}" title="Delete"><i class="fa-regular fa-trash-can"></i></button>
+    </span></td></tr>`).join('');
+  $('.table-wrap', $('#page-reports')).hidden = !list.length;
+  const empty = $('#reportEmpty');
+  empty.hidden = list.length > 0;
+  if (!list.length) {
+    empty.innerHTML = total
+      ? emptyState('fa-filter-circle-xmark', 'No reports match your filters', 'Try a different search term or clear the filters.', '<button type="button" class="btn btn-outline" data-action="clear-filters" data-id="reports">Clear filters</button>')
+      : emptyState('fa-clipboard-list', 'No field reports yet', 'Submit a report after inspecting or repairing a fault.', '<button type="button" class="btn btn-primary" data-action="new-report"><i class="fa-solid fa-plus"></i> New field report</button>');
+  }
+  $('#reportCount').textContent = `Showing ${list.length} of ${total} report${total === 1 ? '' : 's'}`;
+}
+
+function openReportForm(id, relatedId) {
+  const r = id ? db.reports.find(x => x.id === id) : null;
+  if (id && (!r || !canEditReport(r))) return toast('You cannot edit that report.', 'error');
+  closeModal();
+  const admin = isAdmin();
+  const relOpts = [
+    ...scopedTickets().map(t => ({ value: t.id, label: `${t.id}: ${t.title}` })),
+    ...scopedProjects().map(p => ({ value: p.id, label: `${p.id}: ${p.name}` }))
+  ];
+  if (r && r.related && !relOpts.some(o => o.value === r.related)) relOpts.push({ value: r.related, label: `${r.related} (no longer available)` });
+  const statusList = admin ? REPORT_STATUSES : Array.from(new Set([...(r ? [r.status] : []), ...TECH_REPORT_STATUSES]));
+  const values = r ? Object.assign({}, r) : { date: today(), status: 'Submitted', followUp: 'No', related: relatedId || '' };
+  if (!r && relatedId) {
+    const src = db.tickets.find(t => t.id === relatedId) || db.projects.find(p => p.id === relatedId);
+    if (src) values.location = src.location;
+    if (admin && src && src.technicianId) values.technicianId = src.technicianId;
+  }
+  const fields = [
+    admin
+      ? { name: 'technicianId', label: 'Technician', type: 'select', required: true, placeholder: 'Choose technician', options: db.technicians.map(t => ({ value: t.id, label: `${t.name}, ${t.specialization}` })) }
+      : { name: 'technicianId', label: 'Technician', type: 'static', text: displayName() },
+    { name: 'related', label: 'Related ticket or project', type: 'select', placeholder: 'Not linked to a job', options: relOpts },
+    { name: 'location', label: 'Location', required: true, list: 'dl-locations' },
+    { name: 'date', label: 'Date', type: 'date', required: true },
+    { name: 'problem', label: 'Problem observed', type: 'textarea', required: true, full: true },
+    { name: 'work', label: 'Work carried out', type: 'textarea', required: true, full: true },
+    { name: 'materials', label: 'Materials used', type: 'textarea', full: true, rows: 2, placeholder: 'List parts and quantities' },
+    { name: 'recommendation', label: 'Recommendation', type: 'textarea', full: true, rows: 2 },
+    { name: 'status', label: 'Status', type: 'select', required: true, options: statusList },
+    { name: 'followUp', label: 'Follow-up required', type: 'select', required: true, options: ['No', 'Yes'] }
+  ];
+  openForm({
+    title: r ? `Edit report ${r.id}` : 'New field report',
+    submitLabel: r ? 'Save changes' : 'Submit report',
+    fields, values,
+    after: form => {
+      form.elements.related.addEventListener('change', () => {
+        const src = db.tickets.find(t => t.id === form.elements.related.value) || db.projects.find(p => p.id === form.elements.related.value);
+        if (src && !form.elements.location.value.trim()) form.elements.location.value = src.location;
+      });
+      form.elements.status.addEventListener('change', () => { if (form.elements.status.value === 'Requires Follow-up') form.elements.followUp.value = 'Yes'; });
+    },
+    onSubmit: data => {
+      const techId = admin ? data.technicianId : (r ? r.technicianId : user.techId);
+      const rec = {
+        technicianId: techId, technicianName: techName(techId) || (r && r.technicianName) || displayName(),
+        related: data.related, location: data.location, date: data.date, problem: data.problem, work: data.work,
+        materials: data.materials, recommendation: data.recommendation, status: data.status,
+        followUp: data.status === 'Requires Follow-up' ? 'Yes' : data.followUp
+      };
+      if (r) {
+        Object.assign(r, rec);
+        toast(`Report ${r.id} updated.`);
+      } else {
+        const n = Object.assign({ id: nextId('FR', db.reports, 2001), createdAt: new Date().toISOString() }, rec);
+        db.reports.push(n);
+        notify(`Field report submitted by ${rec.technicianName}.`, 'report', 'ADMIN', { kind: 'report', id: n.id });
+        toast(`Report ${n.id} submitted.`);
+      }
+      saveDb('reports');
+      refresh();
+    }
+  });
+}
+
+function viewReport(id) {
+  const r = db.reports.find(x => x.id === id);
+  if (!r || (!isAdmin() && r.technicianId !== user.techId)) return toast('Report not found.', 'error');
+  const relKind = r.related && r.related.startsWith('PJ-') ? 'project' : 'ticket';
+  const exists = r.related && (db.tickets.some(t => t.id === r.related) || db.projects.some(p => p.id === r.related));
+  const body = `
+    <div class="detail-top"><span class="mono id">${esc(r.id)}</span>${badge(r.status)}${r.followUp === 'Yes' ? '<span class="chip-flag">Follow-up required</span>' : ''}</div>
+    <h3 class="detail-title">${esc(r.location)}</h3>
+    <dl class="detail-grid">
+      <div><dt>Technician</dt><dd>${esc(reportTechName(r))}</dd></div>
+      <div><dt>Date</dt><dd>${esc(fmtDate(r.date))}</dd></div>
+      <div class="full"><dt>Related ticket or project</dt><dd>${exists ? `<button type="button" class="link-btn" data-action="open-record" data-kind="${relKind}" data-id="${esc(r.related)}">${esc(relatedLabel(r.related))}</button>` : esc(relatedLabel(r.related))}</dd></div>
+    </dl>
+    <div class="detail-block"><h3>Problem observed</h3><p>${esc(r.problem)}</p></div>
+    <div class="detail-block"><h3>Work carried out</h3><p>${esc(r.work)}</p></div>
+    <div class="detail-block"><h3>Materials used</h3><p>${esc(r.materials || 'None recorded')}</p></div>
+    <div class="detail-block"><h3>Recommendation</h3><p>${esc(r.recommendation || 'None')}</p></div>
+    <div class="modal-foot">
+      ${isAdmin() && r.status === 'Submitted' ? `<button type="button" class="btn btn-outline spacer" data-action="review-report" data-id="${esc(r.id)}"><i class="fa-solid fa-check"></i> Mark as reviewed</button>` : ''}
+      <button type="button" class="btn btn-danger-outline admin-only" data-action="delete-report" data-id="${esc(r.id)}"><i class="fa-regular fa-trash-can"></i> Delete</button>
+      ${canEditReport(r) ? `<button type="button" class="btn btn-outline" data-action="edit-report" data-id="${esc(r.id)}"><i class="fa-regular fa-pen-to-square"></i> Edit</button>` : ''}
+      <button type="button" class="btn btn-primary" data-action="close-modal">Close</button>
+    </div>`;
+  openModal({ title: 'Field report', body, size: 'lg' });
+}
+
+function reviewReport(id) {
+  if (!requireAdmin()) return;
+  const r = db.reports.find(x => x.id === id);
+  if (!r) return;
+  r.status = 'Reviewed';
+  saveDb('reports');
+  toast(`Report ${r.id} marked as reviewed.`);
+  refresh();
+  viewReport(id);
+}
+
+function deleteReport(id) {
+  if (!requireAdmin()) return;
+  const r = db.reports.find(x => x.id === id);
+  if (!r) return;
+  confirmDialog({
+    title: `Delete report ${r.id}?`,
+    message: 'This field report will be permanently removed. This cannot be undone.',
+    onConfirm: () => {
+      db.reports = db.reports.filter(x => x.id !== id);
+      saveDb('reports');
+      closeModal();
+      toast(`Report ${id} deleted.`);
+      refresh();
+    }
+  });
+}
+
+/* ---------- Technicians ---------- */
+function filteredTechs() {
+  const q = val('techSearch').trim().toLowerCase(), st = val('techStatus'), sp = val('techSpec');
+  return db.technicians.filter(t =>
+    (!st || t.status === st) && (!sp || t.specialization === sp) &&
+    (!q || [t.name, t.staffId, t.team, t.specialization, t.email, t.phone].join(' ').toLowerCase().includes(q))
+  ).sort((a, b) => a.name.localeCompare(b.name));
+}
+function renderTechnicians() {
+  if (!isAdmin()) return;
+  const list = filteredTechs();
+  const total = db.technicians.length;
+  $('#techRows').innerHTML = list.map(t => {
+    const n = activeTicketCount(t.id);
+    return `<tr>
+      <td data-label="Technician"><span class="tech-cell"><span class="avatar" aria-hidden="true">${esc(initials(t.name))}</span><span><button type="button" class="link-btn cell-title" data-action="view-tech" data-id="${esc(t.id)}">${esc(t.name)}</button><span class="cell-sub">${esc(t.staffId)}</span></span></span></td>
+      <td data-label="Team">${esc(t.team)}</td>
+      <td data-label="Specialization">${esc(t.specialization)}</td>
+      <td data-label="Phone">${esc(t.phone)}</td>
+      <td data-label="Email">${esc(t.email)}</td>
+      <td data-label="Workload"><span class="load"><span class="bar-track"><span style="width:${Math.min(100, n * 20)}%"></span></span><small>${n} active</small></span></td>
+      <td data-label="Status">${badge(t.status)}</td>
+      <td data-label=""><span class="row-actions">
+        <button type="button" class="icon-btn" data-action="view-tech" data-id="${esc(t.id)}" aria-label="View ${esc(t.name)}" title="View"><i class="fa-regular fa-eye"></i></button>
+        <button type="button" class="icon-btn" data-action="edit-tech" data-id="${esc(t.id)}" aria-label="Edit ${esc(t.name)}" title="Edit"><i class="fa-regular fa-pen-to-square"></i></button>
+        <button type="button" class="icon-btn danger" data-action="delete-tech" data-id="${esc(t.id)}" aria-label="Delete ${esc(t.name)}" title="Delete"><i class="fa-regular fa-trash-can"></i></button>
+      </span></td></tr>`;
+  }).join('');
+  $('.table-wrap', $('#page-technicians')).hidden = !list.length;
+  const empty = $('#techEmpty');
+  empty.hidden = list.length > 0;
+  if (!list.length) {
+    empty.innerHTML = total
+      ? emptyState('fa-filter-circle-xmark', 'No technicians match your filters', 'Try a different search term or clear the filters.', '<button type="button" class="btn btn-outline" data-action="clear-filters" data-id="technicians">Clear filters</button>')
+      : emptyState('fa-users-gear', 'No technicians yet', 'Add technicians so tickets and projects can be assigned.', '<button type="button" class="btn btn-primary" data-action="new-tech"><i class="fa-solid fa-user-plus"></i> Add technician</button>');
+  }
+  $('#techCount').textContent = `Showing ${list.length} of ${total} technician${total === 1 ? '' : 's'}`;
+}
+
+function openTechForm(id) {
+  if (!requireAdmin()) return;
+  const t = id ? techById(id) : null;
+  if (id && !t) return toast('Technician not found.', 'error');
+  closeModal();
+  const fields = [
+    { name: 'name', label: 'Full name', required: true, placeholder: 'e.g. K. Adeyemi' },
+    { name: 'staffId', label: 'Staff ID', required: true, placeholder: 'UI/MD/0000' },
+    { name: 'team', label: 'Department or team', type: 'select', required: true, options: TEAMS },
+    { name: 'specialization', label: 'Specialization', type: 'select', required: true, options: SPECIALIZATIONS },
+    { name: 'phone', label: 'Phone', type: 'tel', required: true },
+    { name: 'email', label: 'Email', type: 'email', required: true },
+    { name: 'status', label: 'Status', type: 'select', required: true, options: TECH_STATUSES, default: 'Available' }
+  ];
+  openForm({
+    title: t ? `Edit ${t.name}` : 'Add technician',
+    submitLabel: t ? 'Save changes' : 'Add technician',
+    size: 'md', fields, values: t || {},
+    onSubmit: data => {
+      if (db.technicians.some(x => x.id !== (t && t.id) && x.staffId.toLowerCase() === data.staffId.toLowerCase())) return `Staff ID ${data.staffId} is already used by another technician.`;
+      if (t) {
+        Object.assign(t, data);
+        db.reports.forEach(r => { if (r.technicianId === t.id) r.technicianName = t.name; });
+        saveDb('reports');
+        toast(`${t.name} updated.`);
+      } else {
+        const n = Object.assign({ id: nextId('TC', db.technicians, 1) }, data);
+        n.id = 'TC-' + pad(parseInt(n.id.split('-')[1], 10));
+        db.technicians.push(n);
+        toast(`${n.name} added to the roster.`);
+      }
+      saveDb('technicians');
+      refresh();
+    }
+  });
+}
+
+function viewTechnician(id) {
+  const t = techById(id);
+  if (!t || !isAdmin()) return toast('Technician not found.', 'error');
+  const active = db.tickets.filter(x => x.technicianId === t.id && !['Resolved', 'Closed'].includes(x.status));
+  const body = `
+    <div class="detail-top"><span class="mono id">${esc(t.staffId)}</span>${badge(t.status)}</div>
+    <h3 class="detail-title">${esc(t.name)}</h3>
+    <dl class="detail-grid">
+      <div><dt>Department or team</dt><dd>${esc(t.team)}</dd></div>
+      <div><dt>Specialization</dt><dd>${esc(t.specialization)}</dd></div>
+      <div><dt>Phone</dt><dd>${esc(t.phone)}</dd></div>
+      <div><dt>Email</dt><dd>${esc(t.email)}</dd></div>
+      <div><dt>Current workload</dt><dd>${active.length} active ticket${active.length === 1 ? '' : 's'}</dd></div>
+      <div><dt>Field reports filed</dt><dd>${db.reports.filter(r => r.technicianId === t.id).length}</dd></div>
+    </dl>
+    <div class="detail-block"><h3>Active tickets</h3>
+      ${active.length ? `<div class="link-list">${active.map(x => `<button type="button" class="pill-btn" data-action="view-ticket" data-id="${esc(x.id)}">${esc(x.id)}: ${esc(x.title)}</button>`).join('')}</div>` : '<p class="muted">No active tickets.</p>'}</div>
+    <div class="modal-foot">
+      <button type="button" class="btn btn-danger-outline" data-action="delete-tech" data-id="${esc(t.id)}"><i class="fa-regular fa-trash-can"></i> Delete</button>
+      <button type="button" class="btn btn-outline" data-action="edit-tech" data-id="${esc(t.id)}"><i class="fa-regular fa-pen-to-square"></i> Edit</button>
+      <button type="button" class="btn btn-primary" data-action="close-modal">Close</button>
+    </div>`;
+  openModal({ title: 'Technician profile', body, size: 'md' });
+}
+
+function deleteTechnician(id) {
+  if (!requireAdmin()) return;
+  const t = techById(id);
+  if (!t) return;
+  const n = activeTicketCount(id);
+  confirmDialog({
+    title: `Delete ${t.name}?`,
+    message: n
+      ? `${n} active ticket${n === 1 ? ' is' : 's are'} assigned to this technician. They will be unassigned. This cannot be undone.`
+      : 'This technician will be removed from the roster. This cannot be undone.',
+    onConfirm: () => {
+      const now = new Date().toISOString();
+      db.tickets.forEach(x => {
+        if (x.technicianId === id) {
+          x.technicianId = '';
+          if (x.status === 'Assigned') x.status = 'Open';
+          x.log.push({ t: now, text: `${t.name} was removed from the roster; ticket unassigned` });
+        }
+      });
+      db.technicians = db.technicians.filter(x => x.id !== id);
+      saveDb('tickets'); saveDb('technicians');
+      closeModal();
+      toast(`${t.name} deleted.`);
+      refresh();
+    }
+  });
+}
+
+/* ---------- Analytics ---------- */
+function rangeStart(range) {
+  const d = new Date(); d.setHours(0, 0, 0, 0);
+  if (range === 'today') return d;
+  if (range === 'week') { d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return d; }
+  if (range === 'month') { d.setDate(1); return d; }
+  return null;
+}
+const inRange = (v, start) => !start || (parseDate(v) && parseDate(v) >= start);
+
+function analyticsData(range) {
+  const start = rangeStart(range);
+  const tickets = db.tickets.filter(t => inRange(t.created, start));
+  const projects = db.projects.filter(p => inRange(p.updatedAt || p.start, start));
+  const reports = db.reports.filter(r => inRange(r.date, start));
+  const c = ticketCounts(tickets);
+  return {
+    tickets, projects, reports, total: tickets.length, resolved: c.done, pending: tickets.length - c.done,
+    avg: avgResponse(tickets),
+    projDone: projects.filter(p => p.status === 'Completed').length,
+    projActive: projects.filter(p => p.status === 'In Progress').length
+  };
+}
+function renderAnalytics() {
+  if (!isAdmin()) return;
+  const range = val('analyticsRange') || 'all';
+  const a = analyticsData(range);
+  $('#analyticsStats').innerHTML = [
+    { label: 'Total tickets', value: a.total, icon: 'fa-ticket', tone: 'blue' },
+    { label: 'Resolved tickets', value: a.resolved, icon: 'fa-circle-check', tone: 'green' },
+    { label: 'Pending tickets', value: a.pending, icon: 'fa-hourglass-half', tone: 'orange' },
+    { label: 'Average response time', value: fmtDuration(a.avg), icon: 'fa-stopwatch', tone: 'gold' },
+    { label: 'Projects completed', value: a.projDone, icon: 'fa-flag-checkered', tone: 'teal' },
+    { label: 'Projects in progress', value: a.projActive, icon: 'fa-diagram-project', tone: 'violet' },
+    { label: 'Field reports submitted', value: a.reports.length, icon: 'fa-clipboard-list', tone: 'slate' }
+  ].map(statCard).join('');
+  $('#anStatus').innerHTML = donutChart(statusSegments(a.tickets));
+  $('#anCategory').innerHTML = barList(CATEGORIES.map(c => ({ label: c, value: a.tickets.filter(t => t.category === c).length })).filter(x => x.value));
+  $('#anPriority').innerHTML = barList(PRIORITIES.map(p => ({ label: p, value: a.tickets.filter(t => t.priority === p).length })));
+  $('#anTech').innerHTML = barList(db.technicians.map(t => ({ label: t.name, value: a.tickets.filter(x => x.technicianId === t.id && ['Resolved', 'Closed'].includes(x.status)).length })).filter(x => x.value).sort((x, y) => y.value - x.value));
+}
+
+function printReport() {
+  if (!requireAdmin()) return;
+  const range = val('analyticsRange') || 'all';
+  const a = analyticsData(range);
+  const row = cells => `<tr>${cells.map(c => `<td>${esc(c)}</td>`).join('')}</tr>`;
+  const html = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>WorkOrder report | ${esc(RANGE_LABELS[range])}</title>
+<style>
+  body{font-family:Arial,Helvetica,sans-serif;color:#111;margin:32px;font-size:13px;line-height:1.45}
+  h1{font-size:22px;margin:0 0 2px} h2{font-size:15px;margin:26px 0 8px;border-bottom:2px solid #0b2a55;padding-bottom:4px;color:#0b2a55}
+  .head{border-bottom:3px solid #0b2a55;padding-bottom:12px;margin-bottom:8px} .sub{color:#555;margin:0}
+  table{width:100%;border-collapse:collapse;margin-top:6px} th,td{border:1px solid #bbb;padding:6px 8px;text-align:left;vertical-align:top} th{background:#eef2f8}
+  .kpi td:first-child{width:60%} .no-print{margin-bottom:16px} button{padding:8px 16px;font-size:14px;cursor:pointer}
+  .foot{margin-top:28px;color:#666;font-size:11px}
+  @media print{.no-print{display:none} body{margin:14mm}}
+</style></head><body>
+<div class="no-print"><button onclick="window.print()">Print this report</button></div>
+<div class="head"><h1>WorkOrder: Maintenance Activity Report</h1>
+<p class="sub">Maintenance Department, University of Ibadan</p>
+<p class="sub">Period: ${esc(RANGE_LABELS[range])} | Generated: ${esc(fmtDateTime(new Date().toISOString()))} | Prepared by: ${esc(displayName())}</p></div>
+<h2>Summary</h2>
+<table class="kpi"><tbody>
+${row(['Total tickets', a.total])}${row(['Resolved tickets (resolved and closed)', a.resolved])}${row(['Pending tickets', a.pending])}
+${row(['Average response time', fmtDuration(a.avg)])}${row(['Projects completed', a.projDone])}${row(['Projects in progress', a.projActive])}${row(['Field reports submitted', a.reports.length])}
+</tbody></table>
+<h2>Tickets by status</h2>
+<table><thead><tr><th>Status</th><th>Count</th></tr></thead><tbody>${TICKET_STATUSES.map(s => row([s, a.tickets.filter(t => t.status === s).length])).join('')}</tbody></table>
+<h2>Tickets by category</h2>
+<table><thead><tr><th>Category</th><th>Count</th></tr></thead><tbody>${CATEGORIES.map(c => row([c, a.tickets.filter(t => t.category === c).length])).join('')}</tbody></table>
+<h2>Ticket register</h2>
+<table><thead><tr><th>ID</th><th>Issue</th><th>Location</th><th>Priority</th><th>Technician</th><th>Status</th></tr></thead><tbody>
+${a.tickets.length ? a.tickets.map(t => row([t.id, t.title, t.location, t.priority, techName(t.technicianId) || 'Unassigned', t.status])).join('') : row(['No tickets in this period', '', '', '', '', ''])}
+</tbody></table>
+<h2>Projects</h2>
+<table><thead><tr><th>ID</th><th>Project</th><th>Team</th><th>Deadline</th><th>Progress</th><th>Status</th></tr></thead><tbody>
+${a.projects.length ? a.projects.map(p => row([p.id, p.name, p.team, fmtDate(p.deadline), p.progress + '%', p.status])).join('') : row(['No projects in this period', '', '', '', '', ''])}
+</tbody></table>
+<h2>Field reports</h2>
+<table><thead><tr><th>ID</th><th>Technician</th><th>Location</th><th>Date</th><th>Status</th><th>Follow-up</th></tr></thead><tbody>
+${a.reports.length ? a.reports.map(r => row([r.id, reportTechName(r), r.location, fmtDate(r.date), r.status, r.followUp])).join('') : row(['No reports in this period', '', '', '', '', ''])}
+</tbody></table>
+<p class="foot">Generated by WorkOrder (demo data stored in the browser).</p>
+</body></html>`;
+
+  const w = window.open('', '_blank');
+  if (w) {
+    w.document.open(); w.document.write(html); w.document.close();
+    w.focus();
+    setTimeout(() => { try { w.print(); } catch (e) { /* user can use the on-page button */ } }, 500);
+    return;
+  }
+  // Pop-ups blocked: print through a hidden frame instead
+  const f = document.createElement('iframe');
+  f.setAttribute('aria-hidden', 'true');
+  f.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0';
+  document.body.appendChild(f);
+  f.contentDocument.open(); f.contentDocument.write(html); f.contentDocument.close();
+  setTimeout(() => { try { f.contentWindow.focus(); f.contentWindow.print(); } catch (e) { toast('Could not open the print dialog.', 'error'); } setTimeout(() => f.remove(), 2000); }, 400);
+}
+
+/* ---------- Settings ---------- */
+function renderSettings() {
+  const p = profile();
+  $('#setName').value = p.name || '';
+  $('#setDept').value = p.department || '';
+  $('#setEmail').value = p.email || '';
+  $('#setPhone').value = p.phone || '';
+  $('#setNotifTicket').checked = settings.notifTicket !== false;
+  $('#setNotifProject').checked = settings.notifProject !== false;
+  $('#setNotifReport').checked = settings.notifReport !== false;
+  $('#setDark').checked = !!settings.dark;
+  ['setName', 'setEmail'].forEach(id => { $('#' + id).setAttribute('aria-invalid', 'false'); $('#err_' + id).hidden = true; });
+}
+function saveSettingsForm(e) {
+  e.preventDefault();
+  const name = val('setName').trim(), email = val('setEmail').trim();
+  let ok = true;
+  const check = (id, msg) => { const el = $('#' + id), er = $('#err_' + id); el.setAttribute('aria-invalid', msg ? 'true' : 'false'); er.textContent = msg; er.hidden = !msg; if (msg && ok) { el.focus(); ok = false; } };
+  check('setName', name ? '' : 'Full name is required.');
+  check('setEmail', /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? '' : 'Enter a valid email address.');
+  if (!ok) return;
+  settings.profiles[user.email] = { name, department: val('setDept').trim(), email, phone: val('setPhone').trim() };
+  settings.notifTicket = $('#setNotifTicket').checked;
+  settings.notifProject = $('#setNotifProject').checked;
+  settings.notifReport = $('#setNotifReport').checked;
+  settings.dark = $('#setDark').checked;
+  if (saveSettings()) { applyTheme(); fillUserChips(); toast('Settings saved.'); refresh(); }
+}
+/* ---------------------------------------------------------
+   12. Global search
+--------------------------------------------------------- */
+function runSearch() {
+  const q = val('globalSearch').trim().toLowerCase();
+  const box = $('#searchResults');
+  if (!q) { hideSearch(); return; }
+  const has = (...parts) => parts.join(' ').toLowerCase().includes(q);
+  const groups = [
+    { title: 'Tickets', kind: 'ticket', icon: 'fa-ticket', tone: 'orange', items: scopedTickets().filter(t => has(t.id, t.title, t.requester, t.location, t.category, t.description, techName(t.technicianId))).slice(0, 4).map(t => ({ id: t.id, main: t.title, sub: `${t.id}, ${t.status}, ${t.location}` })) },
+    { title: 'Projects', kind: 'project', icon: 'fa-diagram-project', tone: 'violet', items: scopedProjects().filter(p => has(p.id, p.name, p.location, p.category, p.team)).slice(0, 4).map(p => ({ id: p.id, main: p.name, sub: `${p.id}, ${p.status}, ${p.progress}%` })) },
+    { title: 'Field reports', kind: 'report', icon: 'fa-clipboard-list', tone: 'blue', items: scopedReports().filter(r => has(r.id, reportTechName(r), r.location, r.problem, r.related)).slice(0, 4).map(r => ({ id: r.id, main: r.problem, sub: `${r.id}, ${reportTechName(r)}, ${r.status}` })) }
+  ];
+  if (isAdmin()) groups.push({ title: 'Technicians', kind: 'technician', icon: 'fa-user-gear', tone: 'green', items: db.technicians.filter(t => has(t.name, t.staffId, t.team, t.specialization)).slice(0, 4).map(t => ({ id: t.id, main: t.name, sub: `${t.staffId}, ${t.specialization}, ${t.status}` })) });
+  const shown = groups.filter(g => g.items.length);
+  box.innerHTML = shown.length
+    ? shown.map(g => `<div class="sr-group"><h3>${g.title}</h3>${g.items.map(i => `<button type="button" class="sr-item" data-action="open-record" data-kind="${g.kind}" data-id="${esc(i.id)}"><span class="chip-icon tone-${g.tone}"><i class="fa-solid ${g.icon}" aria-hidden="true"></i></span><span><b>${esc(i.main.length > 70 ? i.main.slice(0, 70) + '…' : i.main)}</b><small>${esc(i.sub)}</small></span></button>`).join('')}</div>`).join('')
+    : `<p class="sr-empty">No results for "${esc(val('globalSearch').trim())}".</p>`;
+  box.hidden = false;
+}
+function hideSearch() { const b = $('#searchResults'); if (b) b.hidden = true; }
+
+function openRecord(kind, id) {
+  hideSearch(); closeBell();
+  const map = { ticket: ['helpdesk', viewTicket], project: ['projects', viewProject], report: ['reports', viewReport], technician: ['technicians', viewTechnician] };
+  const entry = map[kind];
+  if (!entry) return;
+  if (kind === 'technician' && !isAdmin()) return;
+  closeModal();
+  navigate(entry[0]);
+  entry[1](id);
+}
+
+/* ---------------------------------------------------------
+   13. Sidebar / bell helpers
+--------------------------------------------------------- */
+function openSidebar() {
+  $('#sidebar').classList.add('open');
+  $('#sidebarOverlay').classList.add('show');
+  $('#menuBtn').setAttribute('aria-expanded', 'true');
+}
+function closeSidebar() {
+  $('#sidebar').classList.remove('open');
+  $('#sidebarOverlay').classList.remove('show');
+  $('#menuBtn').setAttribute('aria-expanded', 'false');
+}
+function toggleBell() {
+  const menu = $('#bellMenu');
+  const open = menu.hidden;
+  menu.hidden = !open;
+  $('#bellBtn').setAttribute('aria-expanded', String(open));
+  if (open) renderBell();
+}
+function closeBell() {
+  const m = $('#bellMenu');
+  if (m && !m.hidden) { m.hidden = true; $('#bellBtn').setAttribute('aria-expanded', 'false'); }
+}
+
+/* ---------------------------------------------------------
+   14. Event wiring
+--------------------------------------------------------- */
+const actions = {
+  'logout': () => logout(),
+  'close-modal': () => closeModal(),
+  'close-sidebar': () => closeSidebar(),
+  'close-bell': () => closeBell(),
+  'new-ticket': () => openTicketForm(),
+  'edit-ticket': id => openTicketForm(id),
+  'view-ticket': id => { closeModal(); viewTicket(id); },
+  'delete-ticket': id => deleteTicket(id),
+  'new-project': () => openProjectForm(),
+  'edit-project': id => openProjectForm(id),
+  'view-project': id => { closeModal(); viewProject(id); },
+  'delete-project': id => deleteProject(id),
+  'new-report': (id, el) => openReportForm(null, el && el.dataset.related),
+  'edit-report': id => openReportForm(id),
+  'view-report': id => { closeModal(); viewReport(id); },
+  'delete-report': id => deleteReport(id),
+  'review-report': id => reviewReport(id),
+  'new-tech': () => openTechForm(),
+  'edit-tech': id => openTechForm(id),
+  'view-tech': id => { closeModal(); viewTechnician(id); },
+  'delete-tech': id => deleteTechnician(id),
+  'print-report': () => printReport(),
+  'mark-all-read': () => markAllRead(),
+  'clear-notifications': () => {
+    const mine = myNotifications();
+    if (!mine.length) return toast('There are no notifications to clear.', 'info');
+    confirmDialog({
+      title: 'Clear all notifications?', message: 'Your notifications will be permanently removed.', confirmLabel: 'Clear all',
+      onConfirm: () => {
+        const ids = new Set(mine.map(n => n.id));
+        db.notifications = db.notifications.filter(n => !ids.has(n.id));
+        saveDb('notifications');
+        toast('Notifications cleared.');
+        refresh();
+      }
+    });
+  },
+  'open-notification': id => {
+    const n = db.notifications.find(x => x.id === id);
+    if (!n) return;
+    n.read = true;
+    saveDb('notifications');
+    closeBell();
+    refresh();
+    if (n.link) openRecord(n.link.kind, n.link.id);
+  },
+  'open-record': (id, el) => openRecord(el.dataset.kind, id),
+  'clear-filters': page => {
+    $$(`[data-rerender="${page}"]`).forEach(el => { el.value = ''; });
+    PAGES[page].render();
+  }
+};
+
+function bindEvents() {
+  document.addEventListener('click', e => {
+    const el = e.target.closest('[data-action]');
+    if (el && actions[el.dataset.action]) {
+      if (el.tagName === 'A') { if (el.dataset.action !== 'close-bell') e.preventDefault(); }
+      actions[el.dataset.action](el.dataset.id, el);
+      return;
+    }
+    if (!e.target.closest('.dropdown')) closeBell();
+    if (!e.target.closest('.search')) hideSearch();
+    if (e.target === $('#modalOverlay')) closeModal();
+    if (e.target === $('#confirmOverlay')) closeConfirm();
+  });
+
+  document.addEventListener('input', e => {
+    const t = e.target.closest('[data-rerender]');
+    if (t && e.type === 'input' && t.tagName !== 'SELECT') PAGES[t.dataset.rerender].render();
+  });
+  document.addEventListener('change', e => {
+    const t = e.target.closest('[data-rerender]');
+    if (t) PAGES[t.dataset.rerender].render();
+  });
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') {
+      if (!$('#confirmOverlay').hidden) closeConfirm();
+      else if (!$('#modalOverlay').hidden) closeModal();
+      else { closeBell(); hideSearch(); closeSidebar(); }
+      return;
+    }
+    if (e.key === '/' && user && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName) && $('#modalOverlay').hidden) {
+      e.preventDefault();
+      $('#globalSearch').focus();
+      return;
+    }
+    if (e.key === 'Tab') {
+      const layer = !$('#confirmOverlay').hidden ? $('#confirmBox') : !$('#modalOverlay').hidden ? $('#modal') : null;
+      if (!layer) return;
+      const f = $$('a[href], button:not([disabled]), input:not([disabled]):not([type=hidden]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])', layer).filter(x => x.offsetParent !== null);
+      if (!f.length) return;
+      const first = f[0], last = f[f.length - 1];
+      if (e.shiftKey && (document.activeElement === first || document.activeElement === layer)) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
+  });
+
+  window.addEventListener('hashchange', route);
+
+  $('#loginForm').addEventListener('submit', handleLogin);
+  $('#registerForm').addEventListener('submit', handleSignup);
+  $('#showSignup').addEventListener('click', () => switchAuthMode('signup'));
+  $('#showSignin').addEventListener('click', () => switchAuthMode('signin'));
+  $('#togglePassword').addEventListener('click', e => {
+    const input = $('#loginPassword');
+    const show = input.type === 'password';
+    input.type = show ? 'text' : 'password';
+    const btn = e.currentTarget;
+    btn.setAttribute('aria-pressed', String(show));
+    btn.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+    btn.innerHTML = `<i class="fa-regular ${show ? 'fa-eye-slash' : 'fa-eye'}"></i>`;
+  });
+
+  $('#menuBtn').addEventListener('click', () => ($('#sidebar').classList.contains('open') ? closeSidebar() : openSidebar()));
+  $('#bellBtn').addEventListener('click', toggleBell);
+
+  let timer = null;
+  $('#globalSearch').addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(runSearch, 120); });
+  $('#globalSearch').addEventListener('focus', () => { if (val('globalSearch').trim()) runSearch(); });
+  $('#globalSearch').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { const first = $('#searchResults .sr-item'); if (first) { e.preventDefault(); first.click(); } }
+    if (e.key === 'ArrowDown') { const first = $('#searchResults .sr-item'); if (first) { e.preventDefault(); first.focus(); } }
+  });
+  $('#searchResults').addEventListener('keydown', e => {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    const items = $$('.sr-item', $('#searchResults'));
+    const i = items.indexOf(document.activeElement);
+    if (i < 0) return;
+    e.preventDefault();
+    if (e.key === 'ArrowDown') (items[i + 1] || items[i]).focus();
+    else if (i === 0) $('#globalSearch').focus(); else items[i - 1].focus();
+  });
+
+  $('#confirmOk').addEventListener('click', () => { const cb = confirmCb; closeConfirm(); if (cb) cb(); });
+  $('#confirmCancel').addEventListener('click', closeConfirm);
+  $('#settingsForm').addEventListener('submit', saveSettingsForm);
+  $('#setDark').addEventListener('change', e => { settings.dark = e.target.checked; saveSettings(); applyTheme(); });
+}
+
+/* ---------------------------------------------------------
+   15. Start-up
+--------------------------------------------------------- */
+function populateStatics() {
+  const sources = {
+    ticketStatus: ['All statuses', TICKET_STATUSES], ticketPriority: ['All priorities', PRIORITIES], ticketCategory: ['All categories', CATEGORIES],
+    projectStatus: ['All statuses', PROJECT_STATUSES], projectCategory: ['All categories', CATEGORIES], reportStatus: ['All statuses', REPORT_STATUSES],
+    techStatus: ['All statuses', TECH_STATUSES], techSpec: ['All specializations', SPECIALIZATIONS]
+  };
+  Object.keys(sources).forEach(id => {
+    const [all, list] = sources[id];
+    $('#' + id).innerHTML = `<option value="">${all}</option>` + list.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join('');
+  });
+  $('#dl-locations').innerHTML = LOCATIONS.map(l => `<option value="${esc(l)}"></option>`).join('');
+  $('#dl-departments').innerHTML = DEPARTMENTS.map(l => `<option value="${esc(l)}"></option>`).join('');
+}
+function fillUserChips() {
+  const name = displayName();
+  const role = user.role === 'ADMIN' ? 'Administrator' : user.role === 'TECHNICIAN' ? 'Technician' : 'User';
+  ['sb', 'tb'].forEach(p => {
+    $(`#${p}Name`).textContent = name;
+    $(`#${p}Role`).textContent = role;
+    $(`#${p}Avatar`).textContent = initials(name);
+  });
+}
+function enterApp(fresh) {
+  document.body.setAttribute('data-role', user.role);
+  $('#loginView').hidden = true;
+  $('#appView').hidden = false;
+  fillUserChips();
+  checkDeadlines();
+  renderBell();
+  if (fresh || !location.hash) history.replaceState(null, '', '#/dashboard');
+  route();
+  if (fresh) toast(`Welcome back, ${displayName()}.`);
+}
+
+function clearLegacyDemoSeed() {
+  if (localStorage.getItem('workorderSeeded') !== 'true') return;
+  ['tickets', 'projects', 'fieldReports', 'technicians', 'notifications', 'counters', 'workorderSeeded']
+    .forEach(key => store.remove(key));
+}
+
+async function init() {
+  clearLegacyDemoSeed();
+  loadDb();
+  loadSettings();
+  applyTheme();
+  populateStatics();
+  bindEvents();
+
+  if (!supabaseClient) {
+    $('#loginView').hidden = false;
+    showAuthMessage('loginError', 'Supabase could not load. Check your internet connection and refresh the page.');
+    return;
+  }
+
+  try {
+    const { data, error } = await supabaseClient.auth.getSession();
+    if (error) throw error;
+    if (data.session && data.session.user) {
+      await enterAuthenticatedSession(data.session.user, false);
+    } else {
+      $('#loginView').hidden = false;
+    }
+  } catch (error) {
+    console.error('Session initialization failed:', error);
+    $('#loginView').hidden = false;
+    showAuthMessage('loginError', authErrorMessage(error));
+  }
+}
+
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+else init();
+})();
